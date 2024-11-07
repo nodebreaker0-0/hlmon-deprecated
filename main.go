@@ -90,8 +90,8 @@ func main() {
 
 		decoder := json.NewDecoder(file)
 		for {
-			var logEntry LogData
-			if err := decoder.Decode(&logEntry); err != nil {
+			var rawEntry json.RawMessage
+			if err := decoder.Decode(&rawEntry); err != nil {
 				if err.Error() == "EOF" {
 					break
 				}
@@ -99,22 +99,46 @@ func main() {
 				continue
 			}
 
-			log.Printf("Timestamp: %s\n", logEntry.Timestamp)
-			if status, found := logEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
-				if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) || status.LastAckDuration == nil {
-					alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
-					sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-					sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
-				}
-			} else {
-				alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
-				sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-				sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+			// Attempt to unmarshal as a single LogData object
+			var logEntry LogData
+			if err := json.Unmarshal(rawEntry, &logEntry); err == nil {
+				// Successfully unmarshalled as a single object
+				processLogEntry(logEntry, slackClient, config)
+				continue
 			}
+
+			// If unmarshalling as a single object failed, try as an array of LogData
+			var logEntries []LogData
+			if err := json.Unmarshal(rawEntry, &logEntries); err == nil {
+				// Successfully unmarshalled as an array
+				for _, entry := range logEntries {
+					processLogEntry(entry, slackClient, config)
+				}
+				continue
+			}
+
+			// If both attempts fail, log the error
+			log.Printf("Error: Could not unmarshal JSON line as object or array")
 		}
 
 		file.Close()
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
+	}
+}
+
+// Function to process each log entry
+func processLogEntry(logEntry LogData, slackClient *slack.Client, config Config) {
+	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
+	if status, found := logEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
+		if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) || status.LastAckDuration == nil {
+			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+			sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+		}
+	} else {
+		alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
+		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 	}
 }
 
