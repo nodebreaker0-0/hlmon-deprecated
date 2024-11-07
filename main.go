@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -233,7 +235,6 @@ func findLatestDir(basePath string) (string, error) {
 
 	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
-
 func findLatestFile(dirPath string) (string, error) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
@@ -251,12 +252,17 @@ func findLatestFile(dirPath string) (string, error) {
 		return "", fmt.Errorf("no files found in %s", dirPath)
 	}
 
-	latestFile := files[0]
-	for _, file := range files {
-		if file > latestFile {
-			latestFile = file
+	// Sort files to ensure correct order
+	sort.Slice(files, func(i, j int) bool {
+		iInt, errI := strconv.Atoi(files[i])
+		jInt, errJ := strconv.Atoi(files[j])
+		if errI == nil && errJ == nil {
+			return iInt < jInt
 		}
-	}
+		return files[i] < files[j]
+	})
+
+	latestFile := files[len(files)-1]
 
 	return fmt.Sprintf("%s/%s", dirPath, latestFile), nil
 }
