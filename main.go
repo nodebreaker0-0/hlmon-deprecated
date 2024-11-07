@@ -208,7 +208,7 @@ func main() {
 				processLogEntry(logEntry, config)
 
 				// Update last log timestamp
-				parsedTimestamp, err := time.Parse(time.RFC3339, timestamp)
+				parsedTimestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestamp)
 				if err != nil {
 					log.Printf("Error parsing timestamp: %s", err)
 					continue
