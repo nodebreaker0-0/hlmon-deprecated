@@ -3,12 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -145,14 +141,8 @@ func findLatestLogFile(basePath string) (string, error) {
 		return "", fmt.Errorf("failed to find latest date directory: %w", err)
 	}
 
-	// Find the latest hour directory
-	latestHourDir, err := findLatestDir(latestDateDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to find latest hour directory: %w", err)
-	}
-
 	// Find the latest log file
-	latestLogFile, err := findLatestFile(latestHourDir)
+	latestLogFile, err := findLatestFile(latestDateDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to find latest log file: %w", err)
 	}
@@ -165,14 +155,14 @@ func findLatestDir(basePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
+	println(entries)
 	var dirs []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			dirs = append(dirs, entry.Name())
 		}
 	}
-
+	println(dirs)
 	if len(dirs) == 0 {
 		return "", fmt.Errorf("no directories found in %s", basePath)
 	}
@@ -183,12 +173,12 @@ func findLatestDir(basePath string) (string, error) {
 			latestDir = dir
 		}
 	}
-
+	println(latestDir)
 	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
 
 func findLatestFile(dirPath string) (string, error) {
-	entries, err := ioutil.ReadDir(dirPath)
+	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return "", err
 	}
@@ -204,12 +194,13 @@ func findLatestFile(dirPath string) (string, error) {
 		return "", fmt.Errorf("no files found in %s", dirPath)
 	}
 
-	// Interpret file names as numbers and sort in descending order
-	sort.Slice(files, func(i, j int) bool {
-		iNum, _ := strconv.Atoi(files[i])
-		jNum, _ := strconv.Atoi(files[j])
-		return iNum > jNum
-	})
+	latestFile := files[0]
+	for _, file := range files {
+		if file > latestFile {
+			latestFile = file
+		}
+	}
 
-	return filepath.Join(dirPath, files[0]), nil
+	return fmt.Sprintf("%s/%s", dirPath, latestFile), nil
+
 }
