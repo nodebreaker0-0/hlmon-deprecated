@@ -238,12 +238,12 @@ func findLatestDir(basePath string) (string, error) {
 		return "", fmt.Errorf("no directories found in %s", basePath)
 	}
 
-	latestDir := dirs[0]
-	for _, dir := range dirs {
-		if dir > latestDir {
-			latestDir = dir
-		}
-	}
+	// Sort directories in lexicographical order to ensure latest date is last
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i] < dirs[j]
+	})
+
+	latestDir := dirs[len(dirs)-1]
 
 	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
