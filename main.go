@@ -57,21 +57,20 @@ type ValidatorData struct {
 }
 
 // Function to send a Slack alert
-func sendSlackAlert(config Config, message string) {
-	api := slack.New(config.SlackToken)
+func sendSlackAlert(api *slack.Client, channel, message string) {
 	_, _, err := api.PostMessage(
-		config.SlackChannel,
+		channel,
 		slack.MsgOptionText(message, false),
 	)
 	if err != nil {
-		fmt.Printf("Slack API Error: %s\n", err)
+		log.Printf("Slack API Error: %s\n", err)
 	}
 }
 
 // Function to send a PagerDuty alert
-func sendPagerDutyAlert(config Config, description string) {
+func sendPagerDutyAlert(routingKey, description string) {
 	event := pagerduty.V2Event{
-		RoutingKey: config.PagerDutyAPIKey,
+		RoutingKey: routingKey,
 		Action:     "trigger",
 		Payload: &pagerduty.V2Payload{
 			Summary:   description,
@@ -82,7 +81,7 @@ func sendPagerDutyAlert(config Config, description string) {
 	}
 	_, err := pagerduty.ManageEvent(event)
 	if err != nil {
-		fmt.Printf("PagerDuty API Error: %s\n", err)
+		log.Printf("PagerDuty API Error: %s\n", err)
 	}
 }
 
@@ -90,9 +89,11 @@ func main() {
 	// Load configuration from TOML file
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
-		fmt.Printf("Error loading configuration: %s\n", err)
-		return
+		log.Fatalf("Error loading configuration: %s\n", err)
 	}
+
+	// Initialize Slack client
+	slackClient := slack.New(config.SlackToken)
 
 	// Find the latest log file
 	latestLogFile, err := findLatestLogFile(config.BasePath)
@@ -100,32 +101,23 @@ func main() {
 		log.Fatalf("Failed to find latest log file: %v", err)
 	}
 
-	fmt.Printf("Reading latest log file: %s\n", latestLogFile)
+	log.Printf("Reading latest log file: %s\n", latestLogFile)
 
 	for {
-		file, err := os.Open(latestLogFile)
+		data, err := os.ReadFile(latestLogFile)
 		if err != nil {
-			fmt.Printf("Error opening log file: %s\n", err)
+			log.Printf("Error reading log file: %s\n", err)
 			continue
 		}
 
-		bytes, err := ioutil.ReadAll(file)
-		if err != nil {
-			fmt.Printf("Error reading log file: %s\n", err)
-			file.Close()
-			continue
-		}
-		file.Close()
-
-		var data []interface{}
-		err = json.Unmarshal(bytes, &data)
-		if err != nil {
-			fmt.Printf("Error parsing JSON: %s\n", err)
+		var logData []interface{}
+		if err := json.Unmarshal(data, &logData); err != nil {
+			log.Printf("Error parsing JSON: %s\n", err)
 			continue
 		}
 
-		if len(data) == 2 {
-			if heartbeatStatuses, ok := data[1].(map[string]interface{})["heartbeat_statuses"].(map[string]interface{}); ok {
+		if len(logData) == 2 {
+			if heartbeatStatuses, ok := logData[1].(map[string]interface{})["heartbeat_statuses"].(map[string]interface{}); ok {
 				if status, found := heartbeatStatuses[config.ValidatorAddress]; found {
 					statusMap := status.(map[string]interface{})
 					sinceLastSuccess, ok1 := statusMap["since_last_success"].(float64)
@@ -134,8 +126,8 @@ func main() {
 					// Check the thresholds and send alerts if necessary
 					if !ok1 || !ok2 || sinceLastSuccess > 40 || lastAckDuration > 0.02 {
 						alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, sinceLastSuccess, lastAckDuration)
-						sendSlackAlert(config, alertMessage)
-						sendPagerDutyAlert(config, alertMessage)
+						sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+						sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 					}
 				}
 			}
@@ -150,26 +142,26 @@ func findLatestLogFile(basePath string) (string, error) {
 	// Find the latest date directory
 	latestDateDir, err := findLatestDir(basePath)
 	if err != nil {
-		return "", fmt.Errorf("Failed to find latest date directory: %w", err)
+		return "", fmt.Errorf("failed to find latest date directory: %w", err)
 	}
 
 	// Find the latest hour directory
 	latestHourDir, err := findLatestDir(latestDateDir)
 	if err != nil {
-		return "", fmt.Errorf("Failed to find latest hour directory: %w", err)
+		return "", fmt.Errorf("failed to find latest hour directory: %w", err)
 	}
 
 	// Find the latest log file
 	latestLogFile, err := findLatestFile(latestHourDir)
 	if err != nil {
-		return "", fmt.Errorf("Failed to find latest log file: %w", err)
+		return "", fmt.Errorf("failed to find latest log file: %w", err)
 	}
 
 	return latestLogFile, nil
 }
 
 func findLatestDir(basePath string) (string, error) {
-	entries, err := ioutil.ReadDir(basePath)
+	entries, err := os.ReadDir(basePath)
 	if err != nil {
 		return "", err
 	}
@@ -182,17 +174,17 @@ func findLatestDir(basePath string) (string, error) {
 	}
 
 	if len(dirs) == 0 {
-		return "", fmt.Errorf("No directories found in %s", basePath)
+		return "", fmt.Errorf("no directories found in %s", basePath)
 	}
 
-	// Sort directory names in descending order to select the latest directory
-	sort.Slice(dirs, func(i, j int) bool {
-		iNum, _ := strconv.Atoi(dirs[i])
-		jNum, _ := strconv.Atoi(dirs[j])
-		return iNum > jNum
-	})
+	latestDir := dirs[0]
+	for _, dir := range dirs {
+		if dir > latestDir {
+			latestDir = dir
+		}
+	}
 
-	return filepath.Join(basePath, dirs[0]), nil
+	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
 
 func findLatestFile(dirPath string) (string, error) {
@@ -209,7 +201,7 @@ func findLatestFile(dirPath string) (string, error) {
 	}
 
 	if len(files) == 0 {
-		return "", fmt.Errorf("No files found in %s", dirPath)
+		return "", fmt.Errorf("no files found in %s", dirPath)
 	}
 
 	// Interpret file names as numbers and sort in descending order

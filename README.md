@@ -8,6 +8,7 @@ This project is a Go-based validator monitoring script that reads log files to m
 - Sends alerts to Slack and PagerDuty when thresholds are exceeded.
 - Supports reading configuration values from a TOML file.
 - Automatically identifies the latest log files based on the directory structure.
+- Flexible and easy to configure.
 
 ## Prerequisites
 - Go 1.16 or higher
@@ -55,6 +56,13 @@ The script will:
 - Locate the latest log files based on directory names.
 - Monitor the `since_last_success` and `last_ack_duration` metrics for the specified validator.
 - Send alerts to Slack and PagerDuty when thresholds are breached.
+
+### Example Output
+```
+Reading latest log file: /home/ubuntu/hl/data/node_logs/status/hourly/20230915/14/log.json
+Alert for validator 0xef22f260eec3b7d1edebe53359f5ca584c18d5ac:
+since_last_success = 45.7, last_ack_duration = 0.025
+```
 
 ## Alert Conditions
 The script sends alerts if any of the following conditions are met:
