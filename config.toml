@@ -1,0 +1,13 @@
+# config.toml
+
+# Slack
+slack_token = "YOUR_SLACK_TOKEN"
+slack_channel = "#alerts"
+
+# PagerDuty
+pagerduty_api_key = "YOUR_PAGERDUTY_API_KEY"
+pagerduty_service_id = "YOUR_PAGERDUTY_SERVICE_ID"
+
+base_path = "/home/ubuntu/hl/data/node_logs/status/hourly"
+
+validator_address = "0xef22f260eec3b7d1edebe53359f5ca584c18d5ac"
