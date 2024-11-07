@@ -145,7 +145,6 @@ func main() {
 		}
 
 		if lastRawEntry != nil {
-			log.Printf("Raw JSON content: %s\n", string(lastRawEntry))
 
 			// Attempt to unmarshal as an array containing a timestamp and data
 			var logArray []interface{}
