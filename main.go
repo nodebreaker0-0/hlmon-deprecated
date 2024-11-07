@@ -96,12 +96,19 @@ func main() {
 	// Initialize Slack client
 	slackClient := slack.New(config.SlackToken)
 
-	// Find the latest log file
-	latestLogFile, err := findLatestLogFile(config.BasePath)
-	if err != nil {
-		log.Fatalf("Failed to find latest log file: %v", err)
+	// Keep trying to find the latest log file in a loop
+	var latestLogFile string
+	for {
+		var err error
+		latestLogFile, err = findLatestLogFile(config.BasePath)
+		if err != nil {
+			log.Printf("Failed to find latest log file: %v", err)
+			log.Printf("Retrying in 10 seconds...\n")
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break
 	}
-
 	log.Printf("Reading latest log file: %s\n", latestLogFile)
 
 	for {
@@ -111,22 +118,19 @@ func main() {
 			continue
 		}
 
-		var logData []interface{}
+		var logData LogData
 		if err := json.Unmarshal(data, &logData); err != nil {
 			log.Printf("Error parsing JSON: %s\n", err)
 			continue
 		}
 
-		if len(logData) == 2 {
-			if heartbeatStatuses, ok := logData[1].(map[string]interface{})["heartbeat_statuses"].(map[string]interface{}); ok {
-				if status, found := heartbeatStatuses[config.ValidatorAddress]; found {
-					statusMap := status.(map[string]interface{})
-					sinceLastSuccess, ok1 := statusMap["since_last_success"].(float64)
-					lastAckDuration, ok2 := statusMap["last_ack_duration"].(float64)
-
+		if len(logData.ValidatorData) > 0 {
+			validator := logData.ValidatorData[len(logData.ValidatorData)-1]
+			if validator.HomeValidator == config.ValidatorAddress {
+				if status, found := validator.HeartbeatStatuses[config.ValidatorAddress]; found {
 					// Check the thresholds and send alerts if necessary
-					if !ok1 || !ok2 || sinceLastSuccess > 40 || lastAckDuration > 0.02 {
-						alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, sinceLastSuccess, lastAckDuration)
+					if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) {
+						alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 						sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 						sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 					}
