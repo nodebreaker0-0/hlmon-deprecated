@@ -188,11 +188,7 @@ func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config C
 			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 		}
 	} else if status.SinceLastSuccess <= 0 || *status.LastAckDuration <= 0 {
-		alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
-		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
-	} else if _, isString1 := status.SinceLastSuccess.(string); isString1 || (status.LastAckDuration != nil && _, isString2 := (*status.LastAckDuration).(string); isString2){
-		alertMessage := fmt.Sprintf("HyperLiq Heartbeat status for validator %s is not a number", config.ValidatorAddress)
+		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 	}
