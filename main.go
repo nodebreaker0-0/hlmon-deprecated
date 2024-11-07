@@ -21,6 +21,7 @@ type Config struct {
 	PagerDutyServiceID string `toml:"pagerduty_service_id"`
 	BasePath           string `toml:"base_path"`
 	ValidatorAddress   string `toml:"validator_address"`
+	CheckInterval      int    `toml:"check_interval"`
 }
 
 // Validator structures
@@ -134,16 +135,20 @@ func main() {
 			// Check the heartbeat status of the given validator
 			if status, found := lastEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
 				// Check the thresholds and send alerts if necessary
-				if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) {
-					alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+				if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) || status.LastAckDuration == nil {
+					alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 					sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 					sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 				}
+			} else if status.SinceLastSuccess <= 0 || status.LastAckDuration == nil || *status.LastAckDuration <= 0 {
+				alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
+				sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+				sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 			}
 		}
 
 		// Wait for 10 seconds before reading the file again
-		time.Sleep(10 * time.Second)
+		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
 
