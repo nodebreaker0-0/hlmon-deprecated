@@ -194,11 +194,15 @@ func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config C
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 			sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+			log.Println("status: %s\n", *status.LastAckDuration)
+			log.Println("status: %s\n", status.SinceLastSuccess)
 		}
 	} else if status.SinceLastSuccess <= 0 || *status.LastAckDuration <= 0 {
 		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+		log.Println("status: %s\n", *status.LastAckDuration)
+		log.Println("status: %s\n", status.SinceLastSuccess)
 	}
 }
 
