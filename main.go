@@ -25,6 +25,7 @@ type Config struct {
 	CheckInterval         int     `toml:"check_interval"`
 	AlertThresholdSuccess float64 `toml:"alert_threshold_success"`
 	AlertThresholdAck     float64 `toml:"alert_threshold_ack"`
+	LogUpdateInterval     int     `toml:"log_update_interval"`
 }
 
 // ValidatorData stores the health and heartbeat status of the validator.
@@ -149,6 +150,9 @@ func main() {
 		log.Fatalf("Failed to find latest log file: %v", err)
 	}
 	println(latestLogFile)
+
+	var lastLogTimestamp time.Time
+
 	for {
 		file, err := os.Open(latestLogFile)
 		if err != nil {
@@ -202,12 +206,28 @@ func main() {
 
 				// Process the last log entry only
 				processLogEntry(logEntry, config)
+
+				// Update last log timestamp
+				parsedTimestamp, err := time.Parse(time.RFC3339, timestamp)
+				if err != nil {
+					log.Printf("Error parsing timestamp: %s", err)
+					continue
+				}
+				lastLogTimestamp = parsedTimestamp
 			} else {
 				log.Printf("Error: Could not unmarshal JSON line as expected array")
 			}
 		}
 
 		file.Close()
+
+		// Check if the log file has not been updated for more than 5 minutes
+		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Minute {
+			alertMessage := fmt.Sprintf("Alert: No updates in the log file for more than 5 minutes. Last update was at %s", lastLogTimestamp.Format(time.RFC3339))
+			sendSlackAlert(config.SlackWebhookURL, alertMessage)
+			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
+		}
+
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
