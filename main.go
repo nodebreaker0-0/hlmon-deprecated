@@ -126,7 +126,7 @@ func main() {
 		file, err := os.Open(latestLogFile)
 		if err != nil {
 			log.Printf("Error opening log file: %s\n", err)
-			time.Sleep(10 * time.Second)
+			time.Sleep(30 * time.Second)
 			continue
 		}
 
@@ -146,11 +146,11 @@ func main() {
 			if err := json.Unmarshal(rawEntry, &logArray); err == nil && len(logArray) == 2 {
 				timestamp, ok := logArray[0].(string)
 				if !ok {
-					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[1])
+					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[0])
 					continue
 				}
 
-				validatorDataBytes, err := json.Marshal(logArray[len(logArray)-1])
+				validatorDataBytes, err := json.Marshal(logArray[1])
 				if err != nil {
 					log.Printf("Error marshaling validator data: %s", err)
 					continue
