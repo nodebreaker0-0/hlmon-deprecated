@@ -119,7 +119,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to find latest log file: %v", err)
 	}
-	log.Printf("Reading latest log file: %s\n", latestLogFile)
 
 	for {
 		file, err := os.Open(latestLogFile)
