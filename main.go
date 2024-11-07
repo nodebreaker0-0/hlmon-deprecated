@@ -131,6 +131,7 @@ func main() {
 		}
 
 		decoder := json.NewDecoder(file)
+		var lastRawEntry json.RawMessage
 		for {
 			var rawEntry json.RawMessage
 			if err := decoder.Decode(&rawEntry); err != nil {
@@ -140,10 +141,16 @@ func main() {
 				log.Printf("Error decoding JSON line: %s\n", err)
 				continue
 			}
+			lastRawEntry = rawEntry
+		}
+
+		if lastRawEntry != nil {
+			log.Printf("Raw JSON content: %s\n", string(lastRawEntry))
 
 			// Attempt to unmarshal as an array containing a timestamp and data
 			var logArray []interface{}
-			if err := json.Unmarshal(rawEntry, &logArray); err == nil && len(logArray) == 2 {
+			if err := json.Unmarshal(lastRawEntry, &logArray); err == nil && len(logArray) == 2 {
+				// Get only the last element
 				timestamp, ok := logArray[0].(string)
 				if !ok {
 					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[0])
@@ -162,17 +169,17 @@ func main() {
 					continue
 				}
 
+				// Create the log entry with the last element
 				logEntry := LogArrayEntry{
 					Timestamp: timestamp,
 					Validator: validatorData,
 				}
 
-				// Process the log entry as usual
+				// Process the last log entry only
 				processLogEntry(logEntry, slackClient, config)
-				continue
+			} else {
+				log.Printf("Error: Could not unmarshal JSON line as expected array")
 			}
-
-			log.Printf("Error: Could not unmarshal JSON line as expected array")
 		}
 
 		file.Close()
