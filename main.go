@@ -98,6 +98,7 @@ func main() {
 				log.Printf("Error decoding JSON line: %s\n", err)
 				continue
 			}
+			log.Printf("Raw JSON content: %s\n", string(rawEntry)) // Log the raw JSON content
 
 			// Attempt to unmarshal as a single LogData object
 			var logEntry LogData
