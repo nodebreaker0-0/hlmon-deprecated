@@ -16,6 +16,7 @@ import (
 	"github.com/PagerDuty/go-pagerduty"
 )
 
+// Config struct defines configuration values from the TOML file.
 type Config struct {
 	SlackWebhookURL       string  `toml:"slack_webhook_url"`
 	PagerDutyRoutingKey   string  `toml:"pagerduty_routing_key"`
@@ -26,22 +27,26 @@ type Config struct {
 	AlertThresholdAck     float64 `toml:"alert_threshold_ack"`
 }
 
+// ValidatorData stores the health and heartbeat status of the validator.
 type ValidatorData struct {
 	HomeValidator              string                     `json:"home_validator"`
 	ValidatorsMissingHeartbeat []string                   `json:"validators_missing_heartbeat"`
 	HeartbeatStatuses          map[string]HeartbeatStatus `json:"heartbeat_statuses"`
 }
 
+// HeartbeatStatus holds details of the heartbeat status.
 type HeartbeatStatus struct {
 	SinceLastSuccess float64  `json:"since_last_success"`
 	LastAckDuration  *float64 `json:"last_ack_duration"`
 }
 
+// LogArrayEntry holds a single log entry for monitoring.
 type LogArrayEntry struct {
 	Timestamp string        `json:"timestamp"`
 	Validator ValidatorData `json:"validator_data"`
 }
 
+// sendSlackAlert sends a message to a Slack channel using a webhook.
 func sendSlackAlert(webhookURL, message string) {
 	payload := map[string]string{"text": message}
 	payloadBytes, err := json.Marshal(payload)
@@ -70,6 +75,7 @@ func sendSlackAlert(webhookURL, message string) {
 	}
 }
 
+// sendPagerDutyAlert triggers a PagerDuty incident using the provided routing key.
 func sendPagerDutyAlert(routingKey, description string) {
 	event := pagerduty.V2Event{
 		RoutingKey: routingKey,
@@ -86,6 +92,8 @@ func sendPagerDutyAlert(routingKey, description string) {
 		log.Printf("PagerDuty API Error: %s\n", err)
 	}
 }
+
+// UnmarshalJSON custom unmarshaller for ValidatorData to handle nested JSON array.
 func (vd *ValidatorData) UnmarshalJSON(data []byte) error {
 	// Create a temporary struct for the standard fields
 	type Alias ValidatorData
@@ -128,6 +136,8 @@ func (vd *ValidatorData) UnmarshalJSON(data []byte) error {
 
 	return nil
 }
+
+// main function reads configuration, processes the latest log file, and monitors.
 func main() {
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
@@ -162,7 +172,6 @@ func main() {
 		}
 
 		if lastRawEntry != nil {
-
 			// Attempt to unmarshal as an array containing a timestamp and data
 			var logArray []interface{}
 			if err := json.Unmarshal(lastRawEntry, &logArray); err == nil && len(logArray) == 2 {
@@ -203,6 +212,7 @@ func main() {
 	}
 }
 
+// processLogEntry checks if thresholds are exceeded and triggers alerts accordingly.
 func processLogEntry(logEntry LogArrayEntry, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
@@ -222,6 +232,7 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 	}
 }
 
+// findLatestLogFile finds the latest log file to be processed.
 func findLatestLogFile(basePath string) (string, error) {
 	latestDateDir, err := findLatestDir(basePath)
 	if err != nil {
@@ -236,6 +247,7 @@ func findLatestLogFile(basePath string) (string, error) {
 	return latestLogFile, nil
 }
 
+// findLatestDir returns the latest directory based on lexicographical order.
 func findLatestDir(basePath string) (string, error) {
 	entries, err := os.ReadDir(basePath)
 	if err != nil {
@@ -262,6 +274,8 @@ func findLatestDir(basePath string) (string, error) {
 
 	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
+
+// findLatestFile returns the latest log file within a directory.
 func findLatestFile(dirPath string) (string, error) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {

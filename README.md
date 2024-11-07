@@ -1,93 +1,73 @@
 # Validator Monitoring Script
 
-This project is a Go-based validator monitoring script that reads log files to monitor the health of blockchain validators and sends alerts to Slack and PagerDuty if certain thresholds are breached.
+## Overview
+
+This script monitors a validator's health and alerts through Slack and PagerDuty if certain thresholds are exceeded. It's useful for keeping track of validator performance and ensuring timely actions to maintain network integrity.
 
 ## Features
-- Reads log files to extract validator metrics.
-- Monitors specific metrics such as `since_last_success` and `last_ack_duration` for the validator.
-- Sends alerts to Slack and PagerDuty when thresholds are exceeded.
-- Supports reading configuration values from a TOML file.
-- Automatically identifies the latest log files based on the directory structure.
-- Flexible and easy to configure.
 
-## Prerequisites
-- Go 1.16 or higher
-- Slack App with a valid API token
-- PagerDuty account with an API key
+- **Heartbeat Status Monitoring**: Tracks the status of validator heartbeats to ensure they are responding appropriately.
+- **Slack Alerts**: Sends alerts to a Slack channel if a validator exceeds set thresholds.
+- **PagerDuty Alerts**: Triggers PagerDuty incidents when critical thresholds are breached.
 
-## Installation
-1. Clone this repository:
-   ```sh
-   git clone https://github.com/yourusername/validator-monitoring.git
-   cd validator-monitoring
-   ```
-2. Install the necessary dependencies using `go mod`:
-   ```sh
-   go mod tidy
-   ```
+## Requirements
+
+- Go (Golang) version 1.15 or higher.
+- Configuration file (`config.toml`) with proper credentials for Slack Webhook and PagerDuty routing key.
 
 ## Configuration
-Create a `config.toml` file in the root directory with the following content:
+
+To run the script, you need a configuration file (`config.toml`) with the following fields:
 
 ```toml
-# Slack configuration
-slack_token = "YOUR_SLACK_TOKEN"
-slack_channel = "#alerts"
-
-# PagerDuty configuration
-pagerduty_api_key = "YOUR_PAGERDUTY_API_KEY"
-pagerduty_service_id = "YOUR_PAGERDUTY_SERVICE_ID"
-
-# Log file configuration
-base_path = "/home/ubuntu/hl/data/node_logs/status/hourly"
-
-# Validator address to monitor
-validator_address = "0xef22f260eec3b7d1edebe53359f5ca584c18d5ac"
-```
-Replace the placeholder values with your actual credentials and configuration values.
-
-## Usage
-To run the script, use the following command:
-```sh
-go run main.go
-```
-The script will:
-- Load the configuration from `config.toml`.
-- Locate the latest log files based on directory names.
-- Monitor the `since_last_success` and `last_ack_duration` metrics for the specified validator.
-- Send alerts to Slack and PagerDuty when thresholds are breached.
-
-### Example Output
-```
-Reading latest log file: /home/ubuntu/hl/data/node_logs/status/hourly/20230915/14/log.json
-Alert for validator 0xef22f260eec3b7d1edebe53359f5ca584c18d5ac:
-since_last_success = 45.7, last_ack_duration = 0.025
+slack_webhook_url = "<Your Slack Webhook URL>"
+pagerduty_routing_key = "<Your PagerDuty Routing Key>"
+base_path = "<Path to log files>"
+validator_address = "<Validator Address>"
+check_interval = 60  # Interval in seconds
+alert_threshold_success = 300.0  # Threshold in seconds for since_last_success
+alert_threshold_ack = 60.0  # Threshold in seconds for last_ack_duration
 ```
 
-## Alert Conditions
-The script sends alerts if any of the following conditions are met:
-- `since_last_success` exceeds 40 seconds.
-- `last_ack_duration` exceeds 0.02 seconds.
-- If either of these values is missing or invalid.
+## How to Run
 
-## Directory Structure
-The script expects the logs to be stored in a directory structure like:
-```
-base_path/YYYYMMDD/HH/
-```
-Where `YYYYMMDD` represents the date and `HH` represents the hour. The script will automatically select the latest available log file.
+1. Clone this repository.
+2. Make sure Go is installed and set up on your system.
+3. Create a `config.toml` file with the necessary fields.
+4. Run the script with the command:
+   ```sh
+   go run main.go
+   ```
 
-## Dependencies
-- [slack-go/slack](https://github.com/slack-go/slack): Used for sending Slack notifications.
-- [PagerDuty/go-pagerduty](https://github.com/PagerDuty/go-pagerduty): Used for sending PagerDuty alerts.
-- [BurntSushi/toml](https://github.com/BurntSushi/toml): Used for parsing the TOML configuration file.
+## Functions and Their Purpose
+
+- **sendSlackAlert**: Sends an alert to a specified Slack channel.
+- **sendPagerDutyAlert**: Sends an alert to PagerDuty using the routing key.
+- **UnmarshalJSON** (for `ValidatorData`): Handles the custom unmarshalling of JSON data for heartbeat statuses.
+- **findLatestLogFile**: Finds the latest log file in the specified directory to process.
+- **findLatestDir** and **findLatestFile**: Helper functions that locate the most recent directory and log file, respectively.
+
+## Example Workflow
+
+1. The script finds the most recent log file in the specified directory.
+2. It checks the log file for heartbeat status data.
+3. If a validator's heartbeat status exceeds thresholds, alerts are sent to Slack and PagerDuty.
+
+## Alerts
+
+Alerts are generated under the following conditions:
+- **since_last_success** exceeds `alert_threshold_success`.
+- **last_ack_duration** exceeds `alert_threshold_ack` or is not available.
+
+## Customization
+
+- **Slack and PagerDuty Integration**: Replace the webhook URL and routing key in the `config.toml` file with your own.
+- **Thresholds**: Adjust `alert_threshold_success` and `alert_threshold_ack` in the config file to suit your needs.
 
 ## License
+
 This project is licensed under the MIT License.
 
-## Contributing
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+## Disclaimer
 
-## Contact
-For any questions or issues, please reach out via GitHub or open an issue in the repository.
-
+This script is intended for educational purposes and for use in monitoring validators on a testnet or mainnet. Ensure that sensitive credentials are handled securely.
