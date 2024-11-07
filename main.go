@@ -142,9 +142,9 @@ func main() {
 			// Attempt to unmarshal as an array containing a timestamp and data
 			var logArray []interface{}
 			if err := json.Unmarshal(rawEntry, &logArray); err == nil && len(logArray) == 2 {
-				timestamp, ok := logArray[len(logArray)-1].(string)
+				timestamp, ok := logArray[0].(string)
 				if !ok {
-					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[len(logArray)-1])
+					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[1])
 					continue
 				}
 
