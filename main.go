@@ -140,18 +140,16 @@ func main() {
 				continue
 			}
 
-			log.Printf("Raw JSON content: %s\n", string(rawEntry))
-
 			// Attempt to unmarshal as an array containing a timestamp and data
 			var logArray []interface{}
 			if err := json.Unmarshal(rawEntry, &logArray); err == nil && len(logArray) == 2 {
-				timestamp, ok := logArray[0].(string)
+				timestamp, ok := logArray[len(logArray)-1].(string)
 				if !ok {
-					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[0])
+					log.Printf("Error: Expected timestamp as first element, got: %v", logArray[len(logArray)-1])
 					continue
 				}
 
-				validatorDataBytes, err := json.Marshal(logArray[1])
+				validatorDataBytes, err := json.Marshal(logArray[len(logArray)-1])
 				if err != nil {
 					log.Printf("Error marshaling validator data: %s", err)
 					continue
@@ -189,8 +187,12 @@ func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config C
 			sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 		}
-	} else {
+	} else if status.SinceLastSuccess <= 0 || *status.LastAckDuration <= 0 {
 		alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
+		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+	} else if _, isString1 := status.SinceLastSuccess.(string); isString1 || (status.LastAckDuration != nil && _, isString2 := (*status.LastAckDuration).(string); isString2){
+		alertMessage := fmt.Sprintf("HyperLiq Heartbeat status for validator %s is not a number", config.ValidatorAddress)
 		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 	}
