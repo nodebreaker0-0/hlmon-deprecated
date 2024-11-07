@@ -54,7 +54,8 @@ type ValidatorData struct {
 }
 
 type LogData struct {
-	ValidatorData []ValidatorData `json:"validators"`
+	Timestamp      string        `json:"timestamp"`
+	ValidatorEntry ValidatorData `json:"validator_data"`
 }
 
 // Function to send a Slack alert
@@ -118,22 +119,25 @@ func main() {
 			continue
 		}
 
-		var logData LogData
-		if err := json.Unmarshal(data, &logData); err != nil {
+		var logEntries []LogData
+		if err := json.Unmarshal(data, &logEntries); err != nil {
 			log.Printf("Error parsing JSON: %s\n", err)
 			continue
 		}
 
-		if len(logData.ValidatorData) > 0 {
-			validator := logData.ValidatorData[len(logData.ValidatorData)-1]
-			if validator.HomeValidator == config.ValidatorAddress {
-				if status, found := validator.HeartbeatStatuses[config.ValidatorAddress]; found {
-					// Check the thresholds and send alerts if necessary
-					if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) {
-						alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
-						sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-						sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
-					}
+		if len(logEntries) > 0 {
+			// Parse the last entry in the log
+			lastEntry := logEntries[len(logEntries)-1]
+
+			log.Printf("Timestamp: %s\n", lastEntry.Timestamp)
+
+			// Check the heartbeat status of the given validator
+			if status, found := lastEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
+				// Check the thresholds and send alerts if necessary
+				if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) {
+					alertMessage := fmt.Sprintf("Alert for validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+					sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
+					sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 				}
 			}
 		}
