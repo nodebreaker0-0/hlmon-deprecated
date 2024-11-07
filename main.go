@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -12,14 +14,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/PagerDuty/go-pagerduty"
-	"github.com/slack-go/slack"
 )
 
 type Config struct {
-	SlackToken            string  `toml:"slack_token"`
-	SlackChannel          string  `toml:"slack_channel"`
-	PagerDutyAPIKey       string  `toml:"pagerduty_api_key"`
-	PagerDutyServiceID    string  `toml:"pagerduty_service_id"`
+	SlackWebhookURL       string  `toml:"slack_webhook_url"`
+	PagerDutyRoutingKey   string  `toml:"pagerduty_routing_key"`
 	BasePath              string  `toml:"base_path"`
 	ValidatorAddress      string  `toml:"validator_address"`
 	CheckInterval         int     `toml:"check_interval"`
@@ -43,13 +42,31 @@ type LogArrayEntry struct {
 	Validator ValidatorData `json:"validator_data"`
 }
 
-func sendSlackAlert(api *slack.Client, channel, message string) {
-	_, _, err := api.PostMessage(
-		channel,
-		slack.MsgOptionText(message, false),
-	)
+func sendSlackAlert(webhookURL, message string) {
+	payload := map[string]string{"text": message}
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Slack API Error: %s\n", err)
+		log.Printf("Failed to marshal Slack payload: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		log.Printf("Failed to create Slack request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to send Slack alert: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Slack alert returned non-200 status: %d", resp.StatusCode)
 	}
 }
 
@@ -117,8 +134,6 @@ func main() {
 		log.Fatalf("Error loading configuration: %s\n", err)
 	}
 
-	slackClient := slack.New(config.SlackToken)
-
 	latestLogFile, err := findLatestLogFile(config.BasePath)
 	if err != nil {
 		log.Fatalf("Failed to find latest log file: %v", err)
@@ -177,7 +192,7 @@ func main() {
 				}
 
 				// Process the last log entry only
-				processLogEntry(logEntry, slackClient, config)
+				processLogEntry(logEntry, config)
 			} else {
 				log.Printf("Error: Could not unmarshal JSON line as expected array")
 			}
@@ -188,20 +203,20 @@ func main() {
 	}
 }
 
-func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config Config) {
+func processLogEntry(logEntry LogArrayEntry, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
 		if status.SinceLastSuccess > config.AlertThresholdSuccess || (status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) || status.LastAckDuration == nil {
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
-			sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+			sendSlackAlert(config.SlackWebhookURL, alertMessage)
+			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
 			log.Println("alertMessage(Value Exceeded) - LastAckDuration status: %s : ", *status.LastAckDuration)
 			log.Println("alertMessage(Value Exceeded) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
 		}
 	} else if status.SinceLastSuccess <= 0 || (status.LastAckDuration != nil && *status.LastAckDuration <= 0) {
 		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Strange values)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
-		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
-		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
+		sendSlackAlert(config.SlackWebhookURL, alertMessage)
+		sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
 		log.Println("alertMessage(Strange values) - LastAckDuration status: %s : ", *status.LastAckDuration)
 		log.Println("alertMessage(Strange values) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
 	}
