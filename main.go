@@ -16,13 +16,15 @@ import (
 )
 
 type Config struct {
-	SlackToken         string `toml:"slack_token"`
-	SlackChannel       string `toml:"slack_channel"`
-	PagerDutyAPIKey    string `toml:"pagerduty_api_key"`
-	PagerDutyServiceID string `toml:"pagerduty_service_id"`
-	BasePath           string `toml:"base_path"`
-	ValidatorAddress   string `toml:"validator_address"`
-	CheckInterval      int    `toml:"check_interval"`
+	SlackToken            string  `toml:"slack_token"`
+	SlackChannel          string  `toml:"slack_channel"`
+	PagerDutyAPIKey       string  `toml:"pagerduty_api_key"`
+	PagerDutyServiceID    string  `toml:"pagerduty_service_id"`
+	BasePath              string  `toml:"base_path"`
+	ValidatorAddress      string  `toml:"validator_address"`
+	CheckInterval         int     `toml:"check_interval"`
+	AlertThresholdSuccess float64 `toml:"alert_threshold_success"`
+	AlertThresholdAck     float64 `toml:"alert_threshold_ack"`
 }
 
 type ValidatorData struct {
@@ -189,19 +191,19 @@ func main() {
 func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
-		if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) || status.LastAckDuration == nil {
-			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+		if status.SinceLastSuccess > config.AlertThresholdSuccess || (status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) || status.LastAckDuration == nil {
+			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 			sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
-			log.Println("status: %s\n", *status.LastAckDuration)
-			log.Println("status: %s\n", status.SinceLastSuccess)
+			log.Println("alertMessage(Value Exceeded) - LastAckDuration status: %s : ", *status.LastAckDuration)
+			log.Println("alertMessage(Value Exceeded) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
 		}
-	} else if status.SinceLastSuccess <= 0 || *status.LastAckDuration <= 0 {
-		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+	} else if status.SinceLastSuccess <= 0 || (status.LastAckDuration != nil && *status.LastAckDuration <= 0) {
+		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Strange values)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 		sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 		sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
-		log.Println("status: %s\n", *status.LastAckDuration)
-		log.Println("status: %s\n", status.SinceLastSuccess)
+		log.Println("alertMessage(Strange values) - LastAckDuration status: %s : ", *status.LastAckDuration)
+		log.Println("alertMessage(Strange values) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
 	}
 }
 
