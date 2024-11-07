@@ -13,7 +13,6 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// Config structure for TOML configuration file
 type Config struct {
 	SlackToken         string `toml:"slack_token"`
 	SlackChannel       string `toml:"slack_channel"`
@@ -24,10 +23,10 @@ type Config struct {
 	CheckInterval      int    `toml:"check_interval"`
 }
 
-// Validator structures
-type ValidatorStake struct {
-	Address string `json:"address"`
-	Stake   int    `json:"stake"`
+type ValidatorData struct {
+	HomeValidator              string                     `json:"home_validator"`
+	ValidatorsMissingHeartbeat []string                   `json:"validators_missing_heartbeat"`
+	HeartbeatStatuses          map[string]HeartbeatStatus `json:"heartbeat_statuses"`
 }
 
 type HeartbeatStatus struct {
@@ -35,31 +34,11 @@ type HeartbeatStatus struct {
 	LastAckDuration  *float64 `json:"last_ack_duration"`
 }
 
-type DisconnectedValidator struct {
-	ValidatorAddress string `json:"validator_address"`
-	Disconnections   []struct {
-		PeerAddress string `json:"peer_address"`
-		Round       int    `json:"round"`
-	} `json:"disconnections"`
-}
-
-type ValidatorData struct {
-	HomeValidator              string                     `json:"home_validator"`
-	Round                      int                        `json:"round"`
-	CurrentStakes              []ValidatorStake           `json:"current_stakes"`
-	CurrentJailedValidators    []string                   `json:"current_jailed_validators"`
-	NextProposers              []string                   `json:"next_proposers"`
-	ValidatorsMissingHeartbeat []string                   `json:"validators_missing_heartbeat"`
-	DisconnectedValidators     []DisconnectedValidator    `json:"disconnected_validators"`
-	HeartbeatStatuses          map[string]HeartbeatStatus `json:"heartbeat_statuses"`
-}
-
 type LogData struct {
 	Timestamp      string        `json:"timestamp"`
 	ValidatorEntry ValidatorData `json:"validator_data"`
 }
 
-// Function to send a Slack alert
 func sendSlackAlert(api *slack.Client, channel, message string) {
 	_, _, err := api.PostMessage(
 		channel,
@@ -70,7 +49,6 @@ func sendSlackAlert(api *slack.Client, channel, message string) {
 	}
 }
 
-// Function to send a PagerDuty alert
 func sendPagerDutyAlert(routingKey, description string) {
 	event := pagerduty.V2Event{
 		RoutingKey: routingKey,
@@ -89,77 +67,63 @@ func sendPagerDutyAlert(routingKey, description string) {
 }
 
 func main() {
-	// Load configuration from TOML file
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		log.Fatalf("Error loading configuration: %s\n", err)
 	}
 
-	// Initialize Slack client
 	slackClient := slack.New(config.SlackToken)
 
-	// Keep trying to find the latest log file in a loop
-	var latestLogFile string
-	for {
-		var err error
-		latestLogFile, err = findLatestLogFile(config.BasePath)
-		if err != nil {
-			log.Printf("Failed to find latest log file: %v", err)
-			log.Printf("Retrying in 10 seconds...\n")
-			time.Sleep(10 * time.Second)
-			continue
-		}
-		break
+	latestLogFile, err := findLatestLogFile(config.BasePath)
+	if err != nil {
+		log.Fatalf("Failed to find latest log file: %v", err)
 	}
 	log.Printf("Reading latest log file: %s\n", latestLogFile)
 
 	for {
-		data, err := os.ReadFile(latestLogFile)
+		file, err := os.Open(latestLogFile)
 		if err != nil {
-			log.Printf("Error reading log file: %s\n", err)
+			log.Printf("Error opening log file: %s\n", err)
+			time.Sleep(10 * time.Second)
 			continue
 		}
 
-		var logEntries []LogData
-		if err := json.Unmarshal(data, &logEntries); err != nil {
-			log.Printf("Error parsing JSON: %s\n", err)
-			continue
-		}
+		decoder := json.NewDecoder(file)
+		for {
+			var logEntry LogData
+			if err := decoder.Decode(&logEntry); err != nil {
+				if err.Error() == "EOF" {
+					break
+				}
+				log.Printf("Error decoding JSON line: %s\n", err)
+				continue
+			}
 
-		if len(logEntries) > 0 {
-			// Parse the last entry in the log
-			lastEntry := logEntries[len(logEntries)-1]
-
-			log.Printf("Timestamp: %s\n", lastEntry.Timestamp)
-
-			// Check the heartbeat status of the given validator
-			if status, found := lastEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
-				// Check the thresholds and send alerts if necessary
+			log.Printf("Timestamp: %s\n", logEntry.Timestamp)
+			if status, found := logEntry.ValidatorEntry.HeartbeatStatuses[config.ValidatorAddress]; found {
 				if status.SinceLastSuccess > 40 || (status.LastAckDuration != nil && *status.LastAckDuration > 0.02) || status.LastAckDuration == nil {
 					alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 					sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 					sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 				}
-			} else if status.SinceLastSuccess <= 0 || status.LastAckDuration == nil || *status.LastAckDuration <= 0 {
+			} else {
 				alertMessage := fmt.Sprintf("HyperLiq Heartbeat status not found for validator %s", config.ValidatorAddress)
 				sendSlackAlert(slackClient, config.SlackChannel, alertMessage)
 				sendPagerDutyAlert(config.PagerDutyAPIKey, alertMessage)
 			}
 		}
 
-		// Wait for 10 seconds before reading the file again
+		file.Close()
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
 
 func findLatestLogFile(basePath string) (string, error) {
-	// Find the latest date directory
 	latestDateDir, err := findLatestDir(basePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to find latest date directory: %w", err)
 	}
 
-	// Find the latest log file
 	latestLogFile, err := findLatestFile(latestDateDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to find latest log file: %w", err)
@@ -173,14 +137,14 @@ func findLatestDir(basePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	println(entries)
+
 	var dirs []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			dirs = append(dirs, entry.Name())
 		}
 	}
-	println(dirs)
+
 	if len(dirs) == 0 {
 		return "", fmt.Errorf("no directories found in %s", basePath)
 	}
@@ -191,7 +155,7 @@ func findLatestDir(basePath string) (string, error) {
 			latestDir = dir
 		}
 	}
-	println(latestDir)
+
 	return fmt.Sprintf("%s/%s", basePath, latestDir), nil
 }
 
@@ -220,5 +184,4 @@ func findLatestFile(dirPath string) (string, error) {
 	}
 
 	return fmt.Sprintf("%s/%s", dirPath, latestFile), nil
-
 }
