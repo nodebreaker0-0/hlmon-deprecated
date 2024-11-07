@@ -223,7 +223,7 @@ func main() {
 
 		// Check if the log file has not been updated for more than 5 minutes
 		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Minute {
-			alertMessage := fmt.Sprintf("Alert: No updates in the log file for more than 5 minutes. Last update was at %s", lastLogTimestamp.Format(time.RFC3339))
+			alertMessage := fmt.Sprintf("Alert for HyperLiq validator: no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.")
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
 		}
