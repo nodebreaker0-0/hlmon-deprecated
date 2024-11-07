@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -52,6 +53,10 @@ type ValidatorData struct {
 	HeartbeatStatuses          map[string]HeartbeatStatus `json:"heartbeat_statuses"`
 }
 
+type LogData struct {
+	ValidatorData []ValidatorData `json:"validators"`
+}
+
 // Function to send a Slack alert
 func sendSlackAlert(api *slack.Client, channel, message string) {
 	_, _, err := api.PostMessage(
@@ -75,7 +80,7 @@ func sendPagerDutyAlert(routingKey, description string) {
 			Component: "Validator Monitoring",
 		},
 	}
-	_, err := pagerduty.ManageEvent(event)
+	_, err := pagerduty.ManageEventWithContext(context.Background(), event)
 	if err != nil {
 		log.Printf("PagerDuty API Error: %s\n", err)
 	}
