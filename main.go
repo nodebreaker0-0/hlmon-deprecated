@@ -65,7 +65,48 @@ func sendPagerDutyAlert(routingKey, description string) {
 		log.Printf("PagerDuty API Error: %s\n", err)
 	}
 }
+func (vd *ValidatorData) UnmarshalJSON(data []byte) error {
+	// Create a temporary struct for the standard fields
+	type Alias ValidatorData
+	aux := &struct {
+		HeartbeatStatuses [][]interface{} `json:"heartbeat_statuses"`
+		*Alias
+	}{
+		Alias: (*Alias)(vd),
+	}
 
+	// Unmarshal the JSON into the auxiliary structure
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Convert HeartbeatStatuses from array to map
+	vd.HeartbeatStatuses = make(map[string]HeartbeatStatus)
+	for _, entry := range aux.HeartbeatStatuses {
+		if len(entry) != 2 {
+			continue
+		}
+
+		key, ok := entry[0].(string)
+		if !ok {
+			continue
+		}
+
+		valueBytes, err := json.Marshal(entry[1])
+		if err != nil {
+			continue
+		}
+
+		var heartbeatStatus HeartbeatStatus
+		if err := json.Unmarshal(valueBytes, &heartbeatStatus); err != nil {
+			continue
+		}
+
+		vd.HeartbeatStatuses[key] = heartbeatStatus
+	}
+
+	return nil
+}
 func main() {
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
@@ -140,7 +181,6 @@ func main() {
 	}
 }
 
-// Function to process each log entry
 func processLogEntry(logEntry LogArrayEntry, slackClient *slack.Client, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
