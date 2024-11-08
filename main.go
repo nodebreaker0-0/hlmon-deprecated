@@ -226,6 +226,7 @@ func main() {
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator: no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.")
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
+			log.Println(alertMessage)
 		}
 
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
