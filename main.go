@@ -240,15 +240,15 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
-			log.Println("alertMessage(Value Exceeded) - LastAckDuration status: %s : ", *status.LastAckDuration)
-			log.Println("alertMessage(Value Exceeded) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
+			log.Println("alertMessage(Value Exceeded) - LastAckDuration status")
+			log.Println("alertMessage(Value Exceeded) - SinceLastSuccess status")
 		}
 	} else if status.SinceLastSuccess <= 0 || (status.LastAckDuration != nil && *status.LastAckDuration <= 0) {
 		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Strange values)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
 		sendSlackAlert(config.SlackWebhookURL, alertMessage)
 		sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
-		log.Println("alertMessage(Strange values) - LastAckDuration status: %s : ", *status.LastAckDuration)
-		log.Println("alertMessage(Strange values) - SinceLastSuccess status: %s : ", status.SinceLastSuccess)
+		log.Println("alertMessage(Strange values) - LastAckDuration status")
+		log.Println("alertMessage(Strange values) - SinceLastSuccess status")
 	}
 }
 
