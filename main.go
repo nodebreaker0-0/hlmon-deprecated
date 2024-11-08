@@ -145,15 +145,15 @@ func main() {
 		log.Fatalf("Error loading configuration: %s\n", err)
 	}
 
-	latestLogFile, err := findLatestLogFile(config.BasePath)
-	if err != nil {
-		log.Fatalf("Failed to find latest log file: %v", err)
-	}
-	println(latestLogFile)
-
 	var lastLogTimestamp time.Time
 
 	for {
+		latestLogFile, err := findLatestLogFile(config.BasePath)
+		if err != nil {
+			log.Fatalf("Failed to find latest log file: %v", err)
+		}
+		println(latestLogFile)
+
 		file, err := os.Open(latestLogFile)
 		if err != nil {
 			log.Printf("Error opening log file: %s\n", err)
@@ -222,7 +222,7 @@ func main() {
 		file.Close()
 
 		// Check if the log file has not been updated for more than 5 minutes
-		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Minute {
+		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Second {
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator: no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.")
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
