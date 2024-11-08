@@ -231,24 +231,33 @@ func main() {
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
+func formatLastAckDuration(d *float64) string {
+	if d == nil {
+		return "N/A" // 기본값 또는 설명 메시지
+	}
+	return fmt.Sprintf("%.6f", *d) // 소수점 6자리까지 출력
+}
 
 // processLogEntry checks if thresholds are exceeded and triggers alerts accordingly.
 func processLogEntry(logEntry LogArrayEntry, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
-		if status.SinceLastSuccess > config.AlertThresholdSuccess || (status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) || status.LastAckDuration == nil {
-			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
+		lastAckDurationStr := formatLastAckDuration(status.LastAckDuration)
+
+		if status.SinceLastSuccess > config.AlertThresholdSuccess ||
+			(status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) ||
+			status.LastAckDuration == nil {
+
+			alertMessage := fmt.Sprintf(
+				"Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %s (Value Exceeded)",
+				config.ValidatorAddress, status.SinceLastSuccess, lastAckDurationStr,
+			)
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
-			log.Println("alertMessage(Value Exceeded) - LastAckDuration status")
-			log.Println("alertMessage(Value Exceeded) - SinceLastSuccess status")
+			log.Println("Alert sent for exceeded values.")
 		}
-	} else if status.SinceLastSuccess <= 0 || (status.LastAckDuration != nil && *status.LastAckDuration <= 0) {
-		alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %v (Strange values)", config.ValidatorAddress, status.SinceLastSuccess, status.LastAckDuration)
-		sendSlackAlert(config.SlackWebhookURL, alertMessage)
-		sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
-		log.Println("alertMessage(Strange values) - LastAckDuration status")
-		log.Println("alertMessage(Strange values) - SinceLastSuccess status")
+	} else {
+		log.Printf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
 	}
 }
 
