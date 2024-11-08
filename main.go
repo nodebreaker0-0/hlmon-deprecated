@@ -254,9 +254,12 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 			)
 			sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
-			log.Println("Alert sent for exceeded values.")
+			log.Println(alertMessage)
 		}
 	} else {
+		alertMessage := fmt.Sprintf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
+		sendSlackAlert(config.SlackWebhookURL, alertMessage)
+		sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
 		log.Printf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
 	}
 }
