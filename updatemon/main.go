@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -81,10 +82,35 @@ func checkForUpdate(url string) {
 		message := fmt.Sprintf("The file at %s has been updated. New Last-Modified: %s", url, modified)
 		log.Println(message)
 		sendSlackAlert(config.SlackWebhookURL, message)
+		executeUpdateCommands()
 	}
 
 	lastModified = modified
 	log.Printf("Last-Modified: %s", lastModified)
+}
+
+// executeUpdateCommands runs the commands to update the hl-visor.
+func executeUpdateCommands() {
+	commands := []struct {
+		cmd   string
+		sleep time.Duration
+	}{
+		{"sudo service hlvisor stop", 5 * time.Second},
+		{"curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > hl-visor", 5 * time.Second},
+		{"sudo service hlvisor start", 5 * time.Second},
+		{"sudo service hlvisor restart", 5 * time.Second},
+		{"sudo service hlvisor restart", 5 * time.Second},
+	}
+
+	for _, command := range commands {
+		cmd := exec.Command("/bin/sh", "-c", command.cmd)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Failed to execute command '%s': %v", command.cmd, err)
+		}
+		log.Printf("Command output: %s", output)
+		time.Sleep(command.sleep)
+	}
 }
 
 func main() {

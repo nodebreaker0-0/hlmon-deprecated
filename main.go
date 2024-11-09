@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"time"
@@ -31,6 +32,7 @@ type Config struct {
 // ValidatorData stores the health and heartbeat status of the validator.
 type ValidatorData struct {
 	HomeValidator              string                     `json:"home_validator"`
+	CurrentJailedValidators    []string                   `json:"current_jailed_validators"`
 	ValidatorsMissingHeartbeat []string                   `json:"validators_missing_heartbeat"`
 	HeartbeatStatuses          map[string]HeartbeatStatus `json:"heartbeat_statuses"`
 }
@@ -206,7 +208,12 @@ func main() {
 
 				// Process the last log entry only
 				processLogEntry(logEntry, config)
-
+				if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
+					alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempt to unjail, which usually takes an hour or more. recoverying..")
+					log.Println("Validator is jailed, executing unjail script.")
+					sendSlackAlert(config.SlackWebhookURL, alertMessage)
+					executeUnjailScript(config.BasePath)
+				}
 				// Update last log timestamp
 				parsedTimestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestamp)
 				if err != nil {
@@ -228,10 +235,30 @@ func main() {
 			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
 			log.Println(alertMessage)
 		}
-
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
+
+// contains checks if a string is in a slice of strings
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// executeUnjailScript runs the unjail script located at /data/unjail.sh
+func executeUnjailScript(basePath string) {
+	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", basePath, "unjail.sh"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to execute unjail script: %v", err)
+	}
+	log.Printf("Unjail script output: %s", output)
+}
+
 func formatLastAckDuration(d *float64) string {
 	if d == nil {
 		return "N/A" // 기본값 또는 설명 메시지
