@@ -1,12 +1,23 @@
 # config.toml
 
+# whether to automatically restart and unjail when jailing is detected
+execute_unjail = false
+
 # Slack Webhook URL for sending alerts
 slack_webhook_url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+slack_enabled = false
 
 # PagerDuty
 pagerduty_routing_key = "YOUR_PAGERDUTY_API_KEY"
+pagerduty_enabled = false
 
-base_path = "/home/ubuntu/hl/data/node_logs/status/hourly"
+# Telegram
+telegram_api_key = ""  # obtained via telegram @BotFather user
+telegram_rx_chat_ids = [] # chatIds to alert in Telegram
+telegram_enabled = false
+
+# defaults to ${HOME}/hl/data/node_logs/status/hourly
+base_path = ""
 
 validator_address = "0xef22f260eec3b7d1edebe53359f5ca584c18d5ac"
 
