@@ -32,7 +32,7 @@ alert_threshold_success = 300.0  # Threshold in seconds for since_last_success
 alert_threshold_ack = 60.0  # Threshold in seconds for last_ack_duration
 telegram_api_key = ""  # obtained through telegram @BotFather user
 telegram_rx_chat_ids = [] # your userID which has run "/start" in the chat that the bot that was created in
-telegram_enabled = true # whether to use this alert
+telegram_enabled = false # whether to use this alert
 ```
 
 ## How to Run
