@@ -2,6 +2,8 @@
 
 # whether to automatically restart and unjail when jailing is detected
 execute_unjail = false
+# path to unjail script
+unjail_script_path = "/data/unjail.sh"
 
 # Slack Webhook URL for sending alerts
 slack_webhook_url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
@@ -19,11 +21,12 @@ telegram_enabled = false
 # defaults to ${HOME}/hl/data/node_logs/status/hourly
 base_path = ""
 
-validator_address = "0xef22f260eec3b7d1edebe53359f5ca584c18d5ac"
+# your validator address
+validator_address = "0x000"
 
-#Decide how often you want to view the logs (1 minute recommended)
+# Decide how often you want to view the logs (1 minute recommended)
 check_interval = 60
-#If the logs show no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.
+# If the logs show no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.
 log_update_interval = 300
 
 # SinceLastSuccess

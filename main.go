@@ -23,6 +23,7 @@ import (
 // Config struct defines configuration values from the TOML file.
 type Config struct {
 	executeUnjail         bool    `toml:"execute_unjail"`
+	unjailScriptPath      string  `toml:"unjail_script_path"`
 	SlackWebhookURL       string  `toml:"slack_webhook_url"`
 	SlackEnabled          bool    `toml:"slack_enabled"`
 	PagerDutyRoutingKey   string  `toml:"pagerduty_routing_key"`
@@ -113,9 +114,12 @@ func sendTelegramAlert(apiToken string, chatIDs []int64, description string) {
 		telegramService.AddReceivers(chatID)
 	}
 	notify.UseServices(telegramService)
-	sendResult := notify.Send(context.Background(), "Hyperliquid Monitor", description)
-	if sendResult.Error != nil {
-		log.Printf("Error sending telegram notification: %s", sendResult.Error())
+	err := notify.Send(context.Background(), "Hyperliquid Monitor", description)
+	if err != nil {
+		log.Printf(
+			"Error sending telegram notification: %s",
+			err.Error(),
+		)
 	}
 }
 
@@ -258,7 +262,7 @@ func main() {
 					log.Println("Validator is jailed, executing unjail script.")
 					sendAlertMessage(config, alertMessage)
 					if config.executeUnjail {
-						executeUnjailScript(config.BasePath)
+						executeUnjailScript(config.unjailScriptPath)
 					}
 				}
 				// Update last log timestamp
@@ -298,9 +302,9 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// executeUnjailScript runs the unjail script located at /data/unjail.sh
-func executeUnjailScript(basePath string) {
-	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", basePath, "unjail.sh"))
+// executeUnjailScript runs the unjail script located at unjailScriptPath defined in config
+func executeUnjailScript(unjailScriptPath string) {
+	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", unjailScriptPath, "unjail.sh"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to execute unjail script: %v", err)
