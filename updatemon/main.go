@@ -96,7 +96,7 @@ func executeUpdateCommands() {
 		sleep time.Duration
 	}{
 		{"sudo service hlvisor stop", 5 * time.Second},
-		{"curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > hl-visor", 5 * time.Second},
+		{"curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > /data/hl-visor", 5 * time.Second},
 		{"sudo service hlvisor start", 5 * time.Second},
 		{"sudo service hlvisor restart", 5 * time.Second},
 		{"sudo service hlvisor restart", 5 * time.Second},
