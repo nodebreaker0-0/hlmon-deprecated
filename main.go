@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nikoksr/notify"
+	"github.com/nikoksr/notify/service/telegram"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,8 +22,15 @@ import (
 
 // Config struct defines configuration values from the TOML file.
 type Config struct {
+	executeUnjail         bool    `toml:"execute_unjail"`
+	unjailScriptPath      string  `toml:"unjail_script_path"`
 	SlackWebhookURL       string  `toml:"slack_webhook_url"`
+	SlackEnabled          bool    `toml:"slack_enabled"`
 	PagerDutyRoutingKey   string  `toml:"pagerduty_routing_key"`
+	PagerDutyEnabled      bool    `toml:"pagerduty_enabled"`
+	TelegramAPIKey        string  `toml:"telegram_api_key"`
+	TelegramChatIDs       []int64 `toml:"telegram_rx_chat_ids"`
+	TelegramEnabled       bool    `toml:"telegram_enabled"`
 	BasePath              string  `toml:"base_path"`
 	ValidatorAddress      string  `toml:"validator_address"`
 	CheckInterval         int     `toml:"check_interval"`
@@ -49,6 +59,19 @@ type LogArrayEntry struct {
 	Validator ValidatorData `json:"validator_data"`
 }
 
+// sendAlertMessage
+func sendAlertMessage(config Config, message string) {
+	if config.SlackEnabled {
+		sendSlackAlert(config.SlackWebhookURL, message)
+	}
+	if config.PagerDutyEnabled {
+		sendPagerDutyAlert(config.PagerDutyRoutingKey, message)
+	}
+	if config.TelegramEnabled {
+		sendTelegramAlert(config.TelegramAPIKey, config.TelegramChatIDs, message)
+	}
+}
+
 // sendSlackAlert sends a message to a Slack channel using a webhook.
 func sendSlackAlert(webhookURL, message string) {
 	payload := map[string]string{"text": message}
@@ -71,10 +94,32 @@ func sendSlackAlert(webhookURL, message string) {
 		log.Printf("Failed to send Slack alert: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Printf("Failed to close Slack alert: %v", err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Slack alert returned non-200 status: %d", resp.StatusCode)
+	}
+}
+
+// sendTelegramAlert sends a message to the specified chatIDs using the API key
+func sendTelegramAlert(apiToken string, chatIDs []int64, description string) {
+	log.Printf("Sending telegram alert to chatIds: %d", chatIDs)
+	telegramService, _ := telegram.New(apiToken)
+	for _, chatID := range chatIDs {
+		telegramService.AddReceivers(chatID)
+	}
+	notify.UseServices(telegramService)
+	err := notify.Send(context.Background(), "Hyperliquid Monitor", description)
+	if err != nil {
+		log.Printf(
+			"Error sending telegram notification: %s",
+			err.Error(),
+		)
 	}
 }
 
@@ -146,6 +191,10 @@ func main() {
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		log.Fatalf("Error loading configuration: %s\n", err)
 	}
+	if config.BasePath == "" {
+		config.BasePath, _ = os.UserHomeDir()
+		config.BasePath += "/hl/data/node_logs/status/hourly"
+	}
 
 	var lastLogTimestamp time.Time
 
@@ -211,8 +260,10 @@ func main() {
 				if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
 					alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempt to unjail, which usually takes an hour or more. recoverying..")
 					log.Println("Validator is jailed, executing unjail script.")
-					sendSlackAlert(config.SlackWebhookURL, alertMessage)
-					executeUnjailScript(config.BasePath)
+					sendAlertMessage(config, alertMessage)
+					if config.executeUnjail {
+						executeUnjailScript(config.unjailScriptPath)
+					}
 				}
 				// Update last log timestamp
 				parsedTimestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestamp)
@@ -226,13 +277,15 @@ func main() {
 			}
 		}
 
-		file.Close()
+		err = file.Close()
+		if err != nil {
+			log.Printf("Error Closing file: %s", err)
+		}
 
 		// Check if the log file has not been updated for more than 5 minutes
 		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Second {
 			alertMessage := fmt.Sprintf("Alert for HyperLiq validator: no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.")
-			sendSlackAlert(config.SlackWebhookURL, alertMessage)
-			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
+			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
 		}
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
@@ -249,9 +302,9 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// executeUnjailScript runs the unjail script located at /data/unjail.sh
-func executeUnjailScript(basePath string) {
-	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", basePath, "unjail.sh"))
+// executeUnjailScript runs the unjail script located at unjailScriptPath defined in config
+func executeUnjailScript(unjailScriptPath string) {
+	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", unjailScriptPath, "unjail.sh"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to execute unjail script: %v", err)
@@ -276,18 +329,13 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 			(status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) ||
 			status.LastAckDuration == nil {
 
-			alertMessage := fmt.Sprintf(
-				"Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %s (Value Exceeded)",
-				config.ValidatorAddress, status.SinceLastSuccess, lastAckDurationStr,
-			)
-			sendSlackAlert(config.SlackWebhookURL, alertMessage)
-			sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
+			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %s (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, lastAckDurationStr)
+			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
 		}
 	} else {
 		alertMessage := fmt.Sprintf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
-		sendSlackAlert(config.SlackWebhookURL, alertMessage)
-		sendPagerDutyAlert(config.PagerDutyRoutingKey, alertMessage)
+		sendAlertMessage(config, alertMessage)
 		log.Printf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
 	}
 }
