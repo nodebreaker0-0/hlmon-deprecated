@@ -2,8 +2,8 @@
 
 # whether to automatically restart and unjail when jailing is detected
 execute_unjail = false
-# path to unjail script
-unjail_script_path = "/data/unjail.sh"
+# path to unjail script /path/unjail.sh
+unjail_script_path = "/data"
 
 # Slack Webhook URL for sending alerts
 slack_webhook_url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
