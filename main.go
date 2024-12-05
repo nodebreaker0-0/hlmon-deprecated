@@ -23,8 +23,8 @@ import (
 
 // Config struct defines configuration values from the TOML file.
 type Config struct {
-	executeUnjail         bool    `toml:"execute_unjail"`
-	unjailScriptPath      string  `toml:"unjail_script_path"`
+	ExecuteUnjail         bool    `toml:"execute_unjail"`
+	UnjailScriptPath      string  `toml:"unjail_script_path"`
 	SlackWebhookURL       string  `toml:"slack_webhook_url"`
 	SlackEnabled          bool    `toml:"slack_enabled"`
 	PagerDutyRoutingKey   string  `toml:"pagerduty_routing_key"`
@@ -262,8 +262,8 @@ func main() {
 					alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempt to unjail, which usually takes an hour or more. recoverying..")
 					log.Println("Validator is jailed, executing unjail script.")
 					sendAlertMessage(config, alertMessage)
-					if config.executeUnjail {
-						executeUnjailScript(config.unjailScriptPath)
+					if config.ExecuteUnjail {
+						executeUnjailScript(config.UnjailScriptPath)
 					}
 				}
 				// Update last log timestamp
