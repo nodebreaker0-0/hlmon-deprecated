@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/nikoksr/notify"
-	"github.com/nikoksr/notify/service/telegram"
 	"io"
 	"log"
 	"net/http"
@@ -15,6 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/nikoksr/notify"
+	"github.com/nikoksr/notify/service/telegram"
 
 	"github.com/BurntSushi/toml"
 	"github.com/PagerDuty/go-pagerduty"
@@ -304,7 +305,7 @@ func contains(slice []string, item string) bool {
 
 // executeUnjailScript runs the unjail script located at unjailScriptPath defined in config
 func executeUnjailScript(unjailScriptPath string) {
-	cmd := exec.Command("/bin/sh", fmt.Sprintf("%s/%s", unjailScriptPath, "unjail.sh"))
+	cmd := exec.Command("/bin/sh", unjailScriptPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to execute unjail script: %v", err)
