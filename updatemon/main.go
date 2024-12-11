@@ -119,6 +119,40 @@ func executeUpdateWithChildProcessManagement() {
 	}
 
 	log.Println("Update completed successfully.")
+	// Step 5: Send Slack alert with the updated binary timestamps
+	if err := sendUpdateConfirmationSlackAlert(); err != nil {
+		log.Printf("Failed to send update confirmation Slack alert: %v", err)
+	}
+}
+
+// sendUpdateConfirmationSlackAlert sends a Slack alert with the updated binary timestamps.
+func sendUpdateConfirmationSlackAlert() error {
+	// Execute ls -al /data/hl-visor
+	cmdVisor := exec.Command("/bin/sh", "-c", "ls -al /data/hl-visor")
+	visorOutput, err := cmdVisor.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to execute ls command for hl-visor: %v, output: %s", err, visorOutput)
+		return err
+	}
+
+	// Execute ls -al /data/hl-node
+	cmdNode := exec.Command("/bin/sh", "-c", "ls -al /data/hl-node")
+	nodeOutput, err := cmdNode.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to execute ls command for hl-node: %v, output: %s", err, nodeOutput)
+		return err
+	}
+
+	// Construct the Slack message
+	message := fmt.Sprintf(
+		"Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\n\nhl-node:\n%s",
+		string(visorOutput),
+		string(nodeOutput),
+	)
+
+	// Send the Slack alert
+	sendSlackAlert(config.SlackWebhookURL, message)
+	return nil
 }
 
 func stopHlvisorWithChildProcess() error {
