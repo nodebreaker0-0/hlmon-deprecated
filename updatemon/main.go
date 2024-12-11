@@ -82,35 +82,132 @@ func checkForUpdate(url string) {
 		message := fmt.Sprintf("The file at %s has been updated. New Last-Modified: %s", url, modified)
 		log.Println(message)
 		sendSlackAlert(config.SlackWebhookURL, message)
-		executeUpdateCommands()
+		executeUpdateWithChildProcessManagement()
 	}
 
 	lastModified = modified
 	log.Printf("Last-Modified: %s", lastModified)
 }
 
-// executeUpdateCommands runs the commands to update the hl-visor.
-func executeUpdateCommands() {
-	commands := []struct {
-		cmd   string
-		sleep time.Duration
-	}{
-		{"sudo service hlvisor stop", 5 * time.Second},
-		{"curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > /data/hl-visor", 5 * time.Second},
-		{"sudo service hlvisor start", 5 * time.Second},
-		{"sudo service hlvisor restart", 5 * time.Second},
-		{"sudo service hlvisor restart", 5 * time.Second},
+// executeUpdateWithChildProcessManagement handles the hl-visor and hl-node update safely.
+func executeUpdateWithChildProcessManagement() {
+	log.Println("Starting update process...")
+
+	// Step 1: Stop hl-visor and ensure hl-node is properly terminated
+	if err := stopHlvisorWithChildProcess(); err != nil {
+		log.Printf("Failed to stop hl-visor and its child process: %v", err)
+		return
 	}
 
-	for _, command := range commands {
-		cmd := exec.Command("/bin/sh", "-c", command.cmd)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Printf("Failed to execute command '%s': %v", command.cmd, err)
-		}
-		log.Printf("Command output: %s", output)
-		time.Sleep(command.sleep)
+	// Step 2: Download the new hl-visor binary
+	tempBinaryPath := "/data/hl-visor-new"
+	if err := downloadBinary(tempBinaryPath); err != nil {
+		log.Printf("Failed to download new hl-visor binary: %v", err)
+		return
 	}
+
+	// Step 3: Validate and replace the binary
+	if err := validateAndReplaceBinary(tempBinaryPath); err != nil {
+		log.Printf("Failed to validate or replace hl-visor binary: %v", err)
+		return
+	}
+
+	// Step 4: Restart hl-visor and ensure hl-node restarts correctly
+	if err := restartHlvisorAndCheckChildProcess(); err != nil {
+		log.Printf("Failed to restart hl-visor or its child process: %v", err)
+		return
+	}
+
+	log.Println("Update completed successfully.")
+}
+
+func stopHlvisorWithChildProcess() error {
+	cmdStop := exec.Command("/bin/sh", "-c", "sudo service hl-visor stop")
+	if output, err := cmdStop.CombinedOutput(); err != nil {
+		log.Printf("Failed to stop hl-visor: %v, output: %s", err, output)
+		return err
+	}
+	log.Println("hl-visor stopped successfully.")
+
+	if err := waitForProcessTermination("hlnode", 10*time.Second); err != nil {
+		log.Printf("hlnode did not terminate gracefully: %v", err)
+		return err
+	}
+	log.Println("hlnode terminated successfully.")
+	return nil
+}
+
+func downloadBinary(path string) error {
+	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > %s", path))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to download binary: %v, output: %s", err, output)
+		return err
+	}
+	log.Println("Binary downloaded successfully.")
+	return nil
+}
+
+func validateAndReplaceBinary(tempBinaryPath string) error {
+	var output []byte
+
+	// Step 1: Validate the binary
+	cmdValidate := exec.Command("/bin/sh", "-c", fmt.Sprintf("%s --version", tempBinaryPath))
+	output, err := cmdValidate.CombinedOutput()
+	if err != nil {
+		log.Printf("Binary validation failed: %v, output: %s", err, string(output))
+		return err
+	}
+	log.Printf("Binary validated: %s", string(output))
+
+	// Step 2: Replace the binary
+	cmdReplace := exec.Command("/bin/sh", "-c", fmt.Sprintf("mv %s /data/hl-visor", tempBinaryPath))
+	output, err = cmdReplace.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to replace binary: %v, output: %s", err, string(output))
+		return err
+	}
+	log.Println("Binary replaced successfully.")
+	return nil
+}
+
+func restartHlvisorAndCheckChildProcess() error {
+	cmdRestart := exec.Command("/bin/sh", "-c", "sudo service hl-visor restart")
+	if output, err := cmdRestart.CombinedOutput(); err != nil {
+		log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
+		return err
+	}
+	log.Println("hl-visor restarted successfully.")
+
+	if err := waitForProcess("hl-node", 10*time.Second); err != nil {
+		log.Printf("hl-node did not start properly: %v", err)
+		return err
+	}
+	log.Println("hl-node restarted successfully.")
+	return nil
+}
+
+func waitForProcess(processName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("pgrep %s", processName))
+		if output, err := cmd.CombinedOutput(); err == nil && len(output) > 0 {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("process %s did not start within the timeout", processName)
+}
+
+func waitForProcessTermination(processName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("pgrep %s", processName))
+		if output, err := cmd.CombinedOutput(); err != nil || len(output) == 0 {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("process %s did not terminate within the timeout", processName)
 }
 
 func main() {
