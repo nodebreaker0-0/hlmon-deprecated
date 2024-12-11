@@ -1,1 +1,8 @@
 hlmon
+# Ignore config.toml in the root directory
+/config.toml
+
+# Ignore config.toml in the updatemon directory
+/updatemon/config.toml
+
+/updatemon/updatemon
