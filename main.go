@@ -12,13 +12,13 @@ import (
 	"os/exec"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
-
-	"github.com/nikoksr/notify"
-	"github.com/nikoksr/notify/service/telegram"
 
 	"github.com/BurntSushi/toml"
 	"github.com/PagerDuty/go-pagerduty"
+	"github.com/nikoksr/notify"
+	"github.com/nikoksr/notify/service/telegram"
 )
 
 // Config struct defines configuration values from the TOML file.
@@ -58,6 +58,35 @@ type HeartbeatStatus struct {
 type LogArrayEntry struct {
 	Timestamp string        `json:"timestamp"`
 	Validator ValidatorData `json:"validator_data"`
+}
+
+// AlertState to manage alert triggering state.
+type AlertState struct {
+	isTriggered bool
+	mu          sync.Mutex
+}
+
+var alertStates = map[string]*AlertState{
+	"jailedValidator":    {isTriggered: false},
+	"staleLogFile":       {isTriggered: false},
+	"heartbeatThreshold": {isTriggered: false},
+}
+
+func setAlertState(key string, triggered bool) {
+	if state, exists := alertStates[key]; exists {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		state.isTriggered = triggered
+	}
+}
+
+func getAlertState(key string) bool {
+	if state, exists := alertStates[key]; exists {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.isTriggered
+	}
+	return false
 }
 
 // sendAlertMessage
@@ -257,15 +286,8 @@ func main() {
 				}
 
 				// Process the last log entry only
+				processJailedValidator(logEntry, config)
 				processLogEntry(logEntry, config)
-				if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
-					alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempt to unjail, which usually takes an hour or more. recoverying..")
-					log.Println("Validator is jailed, executing unjail script.")
-					sendAlertMessage(config, alertMessage)
-					if config.ExecuteUnjail {
-						executeUnjailScript(config.UnjailScriptPath)
-					}
-				}
 				// Update last log timestamp
 				parsedTimestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestamp)
 				if err != nil {
@@ -283,17 +305,54 @@ func main() {
 			log.Printf("Error Closing file: %s", err)
 		}
 
-		// Check if the log file has not been updated for more than 5 minutes
-		if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Second {
-			alertMessage := fmt.Sprintf("Alert for HyperLiq validator: no updates for 5 minutes, the hl-visor (or consensus) should be considered dead.")
-			sendAlertMessage(config, alertMessage)
-			log.Println(alertMessage)
-		}
+		checkLogFileStaleness(lastLogTimestamp, config)
 		time.Sleep(time.Duration(config.CheckInterval) * time.Second)
 	}
 }
 
-// contains checks if a string is in a slice of strings
+func processJailedValidator(logEntry LogArrayEntry, config Config) {
+	// Validator is jailed
+	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
+		// Execute unjail script if configured
+		if config.ExecuteUnjail {
+			executeUnjailScript(config.UnjailScriptPath)
+		}
+
+		// Send alert only if not already triggered
+		if !getAlertState("jailedValidator") {
+			alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempting to unjail...")
+			sendAlertMessage(config, alertMessage)
+			log.Println("Validator is jailed, executing unjail script.")
+			setAlertState("jailedValidator", true) // Mark alert as triggered
+		}
+	} else {
+		// Validator has recovered
+		if getAlertState("jailedValidator") { // Ensure alert was previously triggered
+			alertMessage := fmt.Sprintf("Validator %s has recovered from jailed state.", config.ValidatorAddress)
+			sendAlertMessage(config, alertMessage)
+			setAlertState("jailedValidator", false) // Reset the alert state
+		}
+	}
+}
+func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
+	if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Second {
+		if !getAlertState("staleLogFile") {
+			alertMessage := fmt.Sprintf("No updates for %d seconds. The hl-visor or consensus should be considered dead.", config.LogUpdateInterval)
+			sendAlertMessage(config, alertMessage)
+			log.Println(alertMessage)
+			setAlertState("staleLogFile", true)
+		}
+	} else {
+		if getAlertState("staleLogFile") {
+			alertMessage := fmt.Sprintf("Log file updates have resumed.")
+			sendAlertMessage(config, alertMessage)
+			setAlertState("staleLogFile", false)
+		}
+	}
+}
+
+// Utility Functions
+
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -303,7 +362,6 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// executeUnjailScript runs the unjail script located at unjailScriptPath defined in config
 func executeUnjailScript(unjailScriptPath string) {
 	cmd := exec.Command("/bin/sh", unjailScriptPath)
 	output, err := cmd.CombinedOutput()
@@ -313,6 +371,7 @@ func executeUnjailScript(unjailScriptPath string) {
 	log.Printf("Unjail script output: %s", output)
 }
 
+// Alert Sending Functions (Slack, Telegram, PagerDuty) are unchanged but included above for completeness.
 func formatLastAckDuration(d *float64) string {
 	if d == nil {
 		return "N/A" // 기본값 또는 설명 메시지
@@ -323,22 +382,45 @@ func formatLastAckDuration(d *float64) string {
 // processLogEntry checks if thresholds are exceeded and triggers alerts accordingly.
 func processLogEntry(logEntry LogArrayEntry, config Config) {
 	log.Printf("Timestamp: %s\n", logEntry.Timestamp)
+	// Check heartbeat status for the configured validator address
 	if status, found := logEntry.Validator.HeartbeatStatuses[config.ValidatorAddress]; found {
+		// Extract last acknowledgment duration as a string for logging/alerts
 		lastAckDurationStr := formatLastAckDuration(status.LastAckDuration)
 
+		// Check if any threshold is exceeded
 		if status.SinceLastSuccess > config.AlertThresholdSuccess ||
 			(status.LastAckDuration != nil && *status.LastAckDuration > config.AlertThresholdAck) ||
 			status.LastAckDuration == nil {
 
-			alertMessage := fmt.Sprintf("Alert for HyperLiq validator %s:\nsince_last_success = %v, last_ack_duration = %s (Value Exceeded)", config.ValidatorAddress, status.SinceLastSuccess, lastAckDurationStr)
+			// Alert if threshold exceeded
+			if !getAlertState("heartbeatThreshold") {
+				alertMessage := fmt.Sprintf(
+					"Heartbeat alert for validator %s:\nSince last success = %.2f\nLast Ack Duration = %s (Threshold Exceeded)",
+					config.ValidatorAddress,
+					status.SinceLastSuccess,
+					lastAckDurationStr,
+				)
+				sendAlertMessage(config, alertMessage)
+				log.Println(alertMessage)
+				setAlertState("heartbeatThreshold", true) // Mark alert as triggered
+			}
+		} else if getAlertState("heartbeatThreshold") {
+			// Reset alert if thresholds are back to normal
+			alertMessage := fmt.Sprintf("Validator %s's heartbeat has returned to normal.", config.ValidatorAddress)
 			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
+			setAlertState("heartbeatThreshold", false) // Reset the alert state
 		}
 	} else {
-		alertMessage := fmt.Sprintf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
-		sendAlertMessage(config, alertMessage)
-		log.Printf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
+		// Validator not found in heartbeat statuses
+		if !getAlertState("heartbeatThreshold") {
+			alertMessage := fmt.Sprintf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
+			sendAlertMessage(config, alertMessage)
+			log.Printf(alertMessage)
+			setAlertState("heartbeatThreshold", true)
+		}
 	}
+
 }
 
 // findLatestLogFile finds the latest log file to be processed.
