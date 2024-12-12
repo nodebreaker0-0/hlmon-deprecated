@@ -156,7 +156,7 @@ func sendUpdateConfirmationSlackAlert() error {
 }
 
 func stopHlvisorWithChildProcess() error {
-	cmdStop := exec.Command("/bin/sh", "-c", "sudo service hl-visor stop")
+	cmdStop := exec.Command("/bin/sh", "-c", "sudo service hlvisor stop")
 	if output, err := cmdStop.CombinedOutput(); err != nil {
 		log.Printf("Failed to stop hl-visor: %v, output: %s", err, output)
 		return err
@@ -205,7 +205,7 @@ func validateAndReplaceBinary(tempBinaryPath string) error {
 }
 
 func restartHlvisorAndCheckChildProcess() error {
-	cmdRestart := exec.Command("/bin/sh", "-c", "sudo service hl-visor restart")
+	cmdRestart := exec.Command("/bin/sh", "-c", "sudo service hlvisor restart")
 	if output, err := cmdRestart.CombinedOutput(); err != nil {
 		log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
 		return err
