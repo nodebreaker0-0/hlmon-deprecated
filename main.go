@@ -328,7 +328,9 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 		// Validator has recovered
 		if getAlertState("jailedValidator") { // Ensure alert was previously triggered
 			alertMessage := fmt.Sprintf("Validator %s has recovered from jailed state.", config.ValidatorAddress)
-			sendAlertMessage(config, alertMessage)
+			if config.SlackEnabled {
+				sendSlackAlert(config.SlackWebhookURL, alertMessage)
+			}
 			setAlertState("jailedValidator", false) // Reset the alert state
 		}
 	}
@@ -344,7 +346,9 @@ func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
 	} else {
 		if getAlertState("staleLogFile") {
 			alertMessage := fmt.Sprintf("Log file updates have resumed.")
-			sendAlertMessage(config, alertMessage)
+			if config.SlackEnabled {
+				sendSlackAlert(config.SlackWebhookURL, alertMessage)
+			}
 			setAlertState("staleLogFile", false)
 		}
 	}
@@ -485,7 +489,9 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 		} else if getAlertState("heartbeatThreshold") {
 			// Reset alert if thresholds are back to normal
 			alertMessage := fmt.Sprintf("Validator %s's heartbeat has returned to normal.", config.ValidatorAddress)
-			sendAlertMessage(config, alertMessage)
+			if config.SlackEnabled {
+				sendSlackAlert(config.SlackWebhookURL, alertMessage)
+			}
 			log.Println(alertMessage)
 			setAlertState("heartbeatThreshold", false) // Reset the alert state
 		}
