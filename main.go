@@ -368,6 +368,7 @@ func executeUnjailScript(unjailScriptPath string) {
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to execute unjail script: %v", err)
+			setAlertState("jailedValidator", false)
 			return
 		}
 		log.Printf("Unjail script output: %s", output)
@@ -377,6 +378,7 @@ func executeUnjailScript(unjailScriptPath string) {
 		matches := re.FindStringSubmatch(string(output))
 		if len(matches) < 2 {
 			log.Println("No 'Jailed until' timestamp found in script output.")
+			setAlertState("jailedValidator", false)
 			return
 		}
 
@@ -384,6 +386,7 @@ func executeUnjailScript(unjailScriptPath string) {
 		jailedUntil, err := time.Parse("2006-01-02 15:04:05.999999999", matches[1])
 		if err != nil {
 			log.Printf("Failed to parse 'Jailed until' timestamp: %v", err)
+			setAlertState("jailedValidator", false)
 			return
 		}
 
@@ -405,6 +408,42 @@ func executeUnjailScript(unjailScriptPath string) {
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to re-execute unjail script: %v", err)
+			setAlertState("jailedValidator", false)
+		}
+		// Step 1: JSON 추출
+		re2 := regexp.MustCompile(`response: (.+)$`)
+		matches2 := re2.FindStringSubmatch(string(output))
+		if len(matches2) < 2 {
+			log.Println("No valid response JSON found in log message")
+			return
+		}
+
+		jsonData := matches2[1]
+		log.Printf("Extracted JSON: %s", jsonData)
+
+		// Step 2: JSON 데이터 파싱
+		var parsedData map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonData), &parsedData); err != nil {
+			log.Printf("Failed to parse JSON: %v", err)
+			return
+		}
+
+		// JSON 데이터에서 필요한 필드 추출
+		status, statusOk := parsedData["status"].(string)
+		response, responseOk := parsedData["response"].(map[string]interface{})
+		responseType, typeOk := response["type"].(string)
+
+		if !statusOk || !responseOk || !typeOk {
+			log.Println("Failed to extract necessary fields from parsed JSON")
+			return
+		}
+
+		log.Printf("Parsed values - Status: %s, Type: %s", status, responseType)
+
+		// Step 3: 조건 확인
+		if status == "ok" || responseType == "default" {
+			log.Println("Conditions met: status is ok and type is default")
+			setAlertState("jailedValidator", false)
 		}
 		log.Printf("Re-executed unjail script output: %s", output)
 	}()
