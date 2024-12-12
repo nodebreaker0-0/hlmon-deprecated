@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -313,16 +314,14 @@ func main() {
 func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	// Validator is jailed
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
-		// Execute unjail script if configured
-		if config.ExecuteUnjail {
-			executeUnjailScript(config.UnjailScriptPath)
-		}
-
 		// Send alert only if not already triggered
 		if !getAlertState("jailedValidator") {
 			alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempting to unjail...")
 			sendAlertMessage(config, alertMessage)
 			log.Println("Validator is jailed, executing unjail script.")
+			if config.ExecuteUnjail {
+				executeUnjailScript(config.UnjailScriptPath)
+			}
 			setAlertState("jailedValidator", true) // Mark alert as triggered
 		}
 	} else {
@@ -363,12 +362,52 @@ func contains(slice []string, item string) bool {
 }
 
 func executeUnjailScript(unjailScriptPath string) {
-	cmd := exec.Command("/bin/sh", unjailScriptPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Failed to execute unjail script: %v", err)
-	}
-	log.Printf("Unjail script output: %s", output)
+	// Run the initial script and parse the result
+	go func() {
+		cmd := exec.Command("/bin/sh", unjailScriptPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Failed to execute unjail script: %v", err)
+			return
+		}
+		log.Printf("Unjail script output: %s", output)
+
+		// Parse "Jailed until" timestamp from output
+		re := regexp.MustCompile(`Jailed until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)`)
+		matches := re.FindStringSubmatch(string(output))
+		if len(matches) < 2 {
+			log.Println("No 'Jailed until' timestamp found in script output.")
+			return
+		}
+
+		// Parse the timestamp
+		jailedUntil, err := time.Parse("2006-01-02 15:04:05.999999999", matches[1])
+		if err != nil {
+			log.Printf("Failed to parse 'Jailed until' timestamp: %v", err)
+			return
+		}
+
+		// Calculate 10ms after the jailedUntil time
+		timeToExecute := jailedUntil.Add(10 * time.Millisecond)
+		log.Printf("Scheduled to re-execute unjail script at: %s", timeToExecute)
+
+		// Wait until the calculated time
+		now := time.Now()
+		if timeToExecute.After(now) {
+			duration := timeToExecute.Sub(now)
+			log.Printf("Waiting for %s before re-executing unjail script...", duration)
+			time.Sleep(duration)
+		}
+
+		// Re-execute the script
+		log.Println("Re-executing unjail script...")
+		cmd = exec.Command("/bin/sh", unjailScriptPath)
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Failed to re-execute unjail script: %v", err)
+		}
+		log.Printf("Re-executed unjail script output: %s", output)
+	}()
 }
 
 // Alert Sending Functions (Slack, Telegram, PagerDuty) are unchanged but included above for completeness.
