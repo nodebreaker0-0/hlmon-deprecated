@@ -163,7 +163,7 @@ func stopHlvisorWithChildProcess() error {
 	}
 	log.Println("hl-visor stopped successfully.")
 
-	if err := waitForProcessTermination("hlnode", 10*time.Second); err != nil {
+	if err := waitForProcessTermination("hl-node", 10*time.Second); err != nil {
 		log.Printf("hlnode did not terminate gracefully: %v", err)
 		return err
 	}
