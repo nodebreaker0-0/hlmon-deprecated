@@ -83,6 +83,7 @@ func checkForUpdate(url string) {
 	}
 
 	if lastModified != "" && lastModified != modified {
+		log.Printf("Last-Modified: %s", lastModified)
 		message := fmt.Sprintf("The file at %s has been updated. New Last-Modified: %s", url, modified)
 		log.Println(message)
 		sendSlackAlert(config.SlackWebhookURL, message)
@@ -90,7 +91,6 @@ func checkForUpdate(url string) {
 	}
 
 	lastModified = modified
-	log.Printf("Last-Modified: %s", lastModified)
 }
 
 // executeUpdateWithChildProcessManagement handles the hl-visor and hl-node update safely.
