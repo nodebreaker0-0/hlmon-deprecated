@@ -17,6 +17,9 @@ type Config struct {
 	URL             string `toml:"URL"`
 	SlackWebhookURL string `toml:"SlackWebhookURL"`
 	CheckInterval   int    `toml:"CheckInterval"`
+	HlVisorService  string `toml:"HlVisorService"`
+	HlVisorPath     string `toml:"HlVisorPath"`
+	HlNodePath      string `toml:"HlNodePath"`
 }
 
 var config Config
@@ -100,7 +103,7 @@ func executeUpdateWithChildProcessManagement() {
 	}
 
 	// Step 2: Download the new hl-visor binary
-	tempBinaryPath := "/data/hl-visor-new"
+	tempBinaryPath := config.HlVisorPath + "-new"
 	if err := downloadBinary(tempBinaryPath); err != nil {
 		log.Printf("Failed to download new hl-visor binary: %v", err)
 		return
@@ -127,16 +130,16 @@ func executeUpdateWithChildProcessManagement() {
 
 // sendUpdateConfirmationSlackAlert sends a Slack alert with the updated binary timestamps.
 func sendUpdateConfirmationSlackAlert() error {
-	// Execute ls -al /data/hl-visor
-	cmdVisor := exec.Command("/bin/sh", "-c", "ls -al /data/hl-visor")
+	// Execute ls -al hl-visor
+	cmdVisor := exec.Command("/bin/sh", "-c", fmt.Sprintf("ls -al %s", config.HlVisorPath))
 	visorOutput, err := cmdVisor.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to execute ls command for hl-visor: %v, output: %s", err, visorOutput)
 		return err
 	}
 
-	// Execute ls -al /data/hl-node
-	cmdNode := exec.Command("/bin/sh", "-c", "ls -al /data/hl-node")
+	// Execute ls -al hl-node
+	cmdNode := exec.Command("/bin/sh", "-c", fmt.Sprintf("ls -al %s", config.HlNodePath))
 	nodeOutput, err := cmdNode.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to execute ls command for hl-node: %v, output: %s", err, nodeOutput)
@@ -156,7 +159,7 @@ func sendUpdateConfirmationSlackAlert() error {
 }
 
 func stopHlvisorWithChildProcess() error {
-	cmdStop := exec.Command("/bin/sh", "-c", "sudo service hlvisor stop")
+	cmdStop := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s stop", config.HlVisorService))
 	if output, err := cmdStop.CombinedOutput(); err != nil {
 		log.Printf("Failed to stop hl-visor: %v, output: %s", err, output)
 		return err
@@ -164,10 +167,10 @@ func stopHlvisorWithChildProcess() error {
 	log.Println("hl-visor stopped successfully.")
 
 	if err := waitForProcessTermination("hl-node", 10*time.Second); err != nil {
-		log.Printf("hlnode did not terminate gracefully: %v", err)
+		log.Printf("hl-node did not terminate gracefully: %v", err)
 		return err
 	}
-	log.Println("hlnode terminated successfully.")
+	log.Println("hl-node terminated successfully.")
 	return nil
 }
 
@@ -194,7 +197,7 @@ func validateAndReplaceBinary(tempBinaryPath string) error {
 	log.Printf("Binary validated: %s", string(output))
 
 	// Step 2: Replace the binary
-	cmdReplace := exec.Command("/bin/sh", "-c", fmt.Sprintf("mv %s /data/hl-visor", tempBinaryPath))
+	cmdReplace := exec.Command("/bin/sh", "-c", fmt.Sprintf("mv %s %s", tempBinaryPath, config.HlVisorPath))
 	output, err = cmdReplace.CombinedOutput()
 	if err != nil {
 		log.Printf("Failed to replace binary: %v, output: %s", err, string(output))
@@ -205,7 +208,7 @@ func validateAndReplaceBinary(tempBinaryPath string) error {
 }
 
 func restartHlvisorAndCheckChildProcess() error {
-	cmdRestart := exec.Command("/bin/sh", "-c", "sudo service hlvisor restart")
+	cmdRestart := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s restart", config.HlVisorService))
 	if output, err := cmdRestart.CombinedOutput(); err != nil {
 		log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
 		return err
