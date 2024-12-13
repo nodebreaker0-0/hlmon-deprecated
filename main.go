@@ -316,7 +316,7 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
 		// Send alert only if not already triggered
 		if !getAlertState("jailedValidator") {
-			alertMessage := fmt.Sprintf("Automatic jail state due to an update or chain halt. Attempting to unjail...")
+			alertMessage := fmt.Sprintf(":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail...")
 			sendAlertMessage(config, alertMessage)
 			log.Println("Validator is jailed, executing unjail script.")
 			if config.ExecuteUnjail {
@@ -327,7 +327,7 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	} else {
 		// Validator has recovered
 		if getAlertState("jailedValidator") { // Ensure alert was previously triggered
-			alertMessage := fmt.Sprintf("Validator %s has recovered from jailed state.", config.ValidatorAddress)
+			alertMessage := fmt.Sprintf(":large_green_circle: Validator %s has recovered from jailed state.", config.ValidatorAddress)
 			if config.SlackEnabled {
 				sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			}
@@ -338,14 +338,14 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
 	if !lastLogTimestamp.IsZero() && time.Since(lastLogTimestamp) > time.Duration(config.LogUpdateInterval)*time.Second {
 		if !getAlertState("staleLogFile") {
-			alertMessage := fmt.Sprintf("No updates for %d seconds. The hl-visor or consensus should be considered dead.", config.LogUpdateInterval)
+			alertMessage := fmt.Sprintf(":red_circle: No updates for %d seconds. The hl-visor or consensus should be considered dead.", config.LogUpdateInterval)
 			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
 			setAlertState("staleLogFile", true)
 		}
 	} else {
 		if getAlertState("staleLogFile") {
-			alertMessage := fmt.Sprintf("Log file updates have resumed.")
+			alertMessage := fmt.Sprintf(":large_green_circle: Log file updates have resumed.")
 			if config.SlackEnabled {
 				sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			}
@@ -477,7 +477,7 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 			// Alert if threshold exceeded
 			if !getAlertState("heartbeatThreshold") {
 				alertMessage := fmt.Sprintf(
-					"Heartbeat alert for validator %s:\nSince last success = %.2f\nLast Ack Duration = %s (Threshold Exceeded)",
+					":red_circle: Heartbeat alert for validator %s:\nSince last success = %.2f\nLast Ack Duration = %s (Threshold Exceeded)",
 					config.ValidatorAddress,
 					status.SinceLastSuccess,
 					lastAckDurationStr,
@@ -488,7 +488,7 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 			}
 		} else if getAlertState("heartbeatThreshold") {
 			// Reset alert if thresholds are back to normal
-			alertMessage := fmt.Sprintf("Validator %s's heartbeat has returned to normal.", config.ValidatorAddress)
+			alertMessage := fmt.Sprintf(":large_green_circle: Validator %s's heartbeat has returned to normal.", config.ValidatorAddress)
 			if config.SlackEnabled {
 				sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			}
@@ -498,7 +498,7 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 	} else {
 		// Validator not found in heartbeat statuses
 		if !getAlertState("heartbeatThreshold") {
-			alertMessage := fmt.Sprintf("Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
+			alertMessage := fmt.Sprintf(":red_circle: Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
 			sendAlertMessage(config, alertMessage)
 			log.Printf(alertMessage)
 			setAlertState("heartbeatThreshold", true)
