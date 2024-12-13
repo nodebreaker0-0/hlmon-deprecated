@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"time"
 
@@ -180,6 +181,10 @@ func downloadBinary(path string) error {
 		log.Printf("Failed to download binary: %v, output: %s", err, output)
 		return err
 	}
+	if err := os.Chmod(path, 0775); err != nil {
+		log.Printf("Failed to set executable permissions: %v", err)
+		return err
+	}
 	log.Println("Binary downloaded successfully.")
 	return nil
 }
@@ -230,7 +235,7 @@ func waitForProcess(processName string, timeout time.Duration) error {
 		if output, err := cmd.CombinedOutput(); err == nil && len(output) > 0 {
 			return nil
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("process %s did not start within the timeout", processName)
 }
@@ -242,7 +247,7 @@ func waitForProcessTermination(processName string, timeout time.Duration) error 
 		if output, err := cmd.CombinedOutput(); err != nil || len(output) == 0 {
 			return nil
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("process %s did not terminate within the timeout", processName)
 }
