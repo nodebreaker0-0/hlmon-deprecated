@@ -84,7 +84,7 @@ func checkForUpdate(url string) {
 
 	if lastModified != "" && lastModified != modified {
 		log.Printf("Last-Modified: %s", lastModified)
-		message := fmt.Sprintf("The file at %s has been updated. New Last-Modified: %s", url, modified)
+		message := fmt.Sprintf(":red_circle: The file at %s has been updated. New Last-Modified: %s", url, modified)
 		log.Println(message)
 		sendSlackAlert(config.SlackWebhookURL, message)
 		executeUpdateWithChildProcessManagement()
@@ -149,7 +149,7 @@ func sendUpdateConfirmationSlackAlert() error {
 
 	// Construct the Slack message
 	message := fmt.Sprintf(
-		"Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\n\nhl-node:\n%s",
+		":large_green_circle: Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\n\nhl-node:\n%s",
 		string(visorOutput),
 		string(nodeOutput),
 	)
