@@ -85,7 +85,7 @@ func checkForUpdate(url string) {
 
 	if lastModified != "" && lastModified != modified {
 		log.Printf("Last-Modified: %s", lastModified)
-		if config.Autoupdate {
+		if config.Automode {
 			message := fmt.Sprintf(":red_circle: (FullAutoMode)The file at %s has been updated. New Last-Modified: %s", url, modified)
 			log.Println(message)
 			sendSlackAlert(config.SlackWebhookURL, message)
