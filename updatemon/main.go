@@ -21,6 +21,7 @@ type Config struct {
 	HlVisorService  string `toml:"HlVisorService"`
 	HlVisorPath     string `toml:"HlVisorPath"`
 	HlNodePath      string `toml:"HlNodePath"`
+	Automode        bool   `toml:"Automode"`
 }
 
 var config Config
@@ -84,10 +85,19 @@ func checkForUpdate(url string) {
 
 	if lastModified != "" && lastModified != modified {
 		log.Printf("Last-Modified: %s", lastModified)
-		message := fmt.Sprintf(":red_circle: The file at %s has been updated. New Last-Modified: %s", url, modified)
-		log.Println(message)
-		sendSlackAlert(config.SlackWebhookURL, message)
-		executeUpdateWithChildProcessManagement()
+		if config.Autoupdate {
+			message := fmt.Sprintf(":red_circle: (FullAutoMode)The file at %s has been updated. New Last-Modified: %s", url, modified)
+			log.Println(message)
+			sendSlackAlert(config.SlackWebhookURL, message)
+			executeUpdateWithChildProcessManagement()
+		} else {
+			message := fmt.Sprintf(":red_circle: (Automatic for hlnode, manual for hlvisor NODE) The file at %s has been updated. New Last-Modified: %s", url, modified)
+			log.Println(message)
+			sendSlackAlert(config.SlackWebhookURL, message)
+			time.Sleep(5 * time.Second)
+			sendUpdateConfirmationSlackAlert()
+		}
+
 	}
 
 	lastModified = modified
@@ -149,7 +159,7 @@ func sendUpdateConfirmationSlackAlert() error {
 
 	// Construct the Slack message
 	message := fmt.Sprintf(
-		":large_green_circle: Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\n\nhl-node:\n%s",
+		":large_green_circle: Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\nhl-node:\n%s",
 		string(visorOutput),
 		string(nodeOutput),
 	)
