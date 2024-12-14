@@ -320,7 +320,7 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 			sendAlertMessage(config, alertMessage)
 			log.Println("Validator is jailed, executing unjail script.")
 			if config.ExecuteUnjail {
-				executeUnjailScript(config.UnjailScriptPath)
+				executeUnjailScript(config.UnjailScriptPath, config)
 			}
 			setAlertState("jailedValidator", true) // Mark alert as triggered
 		}
@@ -365,14 +365,15 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func executeUnjailScript(unjailScriptPath string) {
+func executeUnjailScript(unjailScriptPath string, config Config) {
 	// Run the initial script and parse the result
 	go func() {
 		cmd := exec.Command("/bin/sh", unjailScriptPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to execute unjail script: %v", err)
-			setAlertState("jailedValidator", false)
+			alertMessage := fmt.Sprintf("Failed to execute unjail script: %v", err)
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 		log.Printf("Unjail script output: %s", output)
@@ -382,7 +383,8 @@ func executeUnjailScript(unjailScriptPath string) {
 		matches := re.FindStringSubmatch(string(output))
 		if len(matches) < 2 {
 			log.Println("No 'Jailed until' timestamp found in script output.")
-			setAlertState("jailedValidator", false)
+			alertMessage := fmt.Sprintf("No 'Jailed until' timestamp found in script output.")
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 
@@ -390,7 +392,8 @@ func executeUnjailScript(unjailScriptPath string) {
 		jailedUntil, err := time.Parse("2006-01-02 15:04:05.999999999", matches[1])
 		if err != nil {
 			log.Printf("Failed to parse 'Jailed until' timestamp: %v", err)
-			setAlertState("jailedValidator", false)
+			alertMessage := fmt.Sprintf("Failed to parse 'Jailed until' timestamp: %v", err)
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 
@@ -412,13 +415,16 @@ func executeUnjailScript(unjailScriptPath string) {
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to re-execute unjail script: %v", err)
-			setAlertState("jailedValidator", false)
+			alertMessage := fmt.Sprintf("Failed to re-execute unjail script: %v", err)
+			sendAlertMessage(config, alertMessage)
 		}
 		// Step 1: JSON 추출
 		re2 := regexp.MustCompile(`response: (.+)$`)
 		matches2 := re2.FindStringSubmatch(string(output))
 		if len(matches2) < 2 {
 			log.Println("No valid response JSON found in log message")
+			alertMessage := fmt.Sprintf("No valid response JSON found in log message")
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 
@@ -429,6 +435,8 @@ func executeUnjailScript(unjailScriptPath string) {
 		var parsedData map[string]interface{}
 		if err := json.Unmarshal([]byte(jsonData), &parsedData); err != nil {
 			log.Printf("Failed to parse JSON: %v", err)
+			alertMessage := fmt.Sprintf("Failed to parse JSON: %v", err)
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 
@@ -439,6 +447,8 @@ func executeUnjailScript(unjailScriptPath string) {
 
 		if !statusOk || !responseOk || !typeOk {
 			log.Println("Failed to extract necessary fields from parsed JSON")
+			alertMessage := fmt.Sprintf("Failed to extract necessary fields from parsed JSON")
+			sendAlertMessage(config, alertMessage)
 			return
 		}
 
@@ -447,7 +457,8 @@ func executeUnjailScript(unjailScriptPath string) {
 		// Step 3: 조건 확인
 		if status == "ok" || responseType == "default" {
 			log.Println("Conditions met: status is ok and type is default")
-			setAlertState("jailedValidator", false)
+			alertMessage := fmt.Sprintf("Conditions met: status is ok and type is default")
+			sendAlertMessage(config, alertMessage)
 		}
 		log.Printf("Re-executed unjail script output: %s", output)
 	}()
