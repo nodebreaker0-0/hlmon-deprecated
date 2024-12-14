@@ -91,7 +91,7 @@ func checkForUpdate(url string) {
 			sendSlackAlert(config.SlackWebhookURL, message)
 			executeUpdateWithChildProcessManagement()
 		} else {
-			message := fmt.Sprintf(":red_circle: (Automatic for hlnode, manual for hlvisor NODE) The file at %s has been updated. New Last-Modified: %s", url, modified)
+			message := fmt.Sprintf(":red_circle: (Automatic for hlnode, manual for hlvisor MODE) The file at %s has been updated. New Last-Modified: %s", url, modified)
 			log.Println(message)
 			sendSlackAlert(config.SlackWebhookURL, message)
 			time.Sleep(5 * time.Second)
