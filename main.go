@@ -316,7 +316,7 @@ func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
 		// Send alert only if not already triggered
 		if !getAlertState("jailedValidator") {
-			alertMessage := fmt.Sprintf(":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail...")
+			alertMessage := ":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail..."
 			sendAlertMessage(config, alertMessage)
 			log.Println("Validator is jailed, executing unjail script.")
 			if config.ExecuteUnjail {
@@ -348,13 +348,13 @@ func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
 				sendAlertMessage(config, alertMessage)
 			}
 			log.Println("hl-visor restarted successfully.")
-			alertMessage = fmt.Sprintf(":red_circle: hl-visor restarted successfully.")
+			alertMessage = ":red_circle: hl-visor restarted successfully."
 			sendAlertMessage(config, alertMessage)
 			setAlertState("staleLogFile", true)
 		}
 	} else {
 		if getAlertState("staleLogFile") {
-			alertMessage := fmt.Sprintf(":large_green_circle: Log file updates have resumed.")
+			alertMessage := ":large_green_circle: Log file updates have resumed."
 			if config.SlackEnabled {
 				sendSlackAlert(config.SlackWebhookURL, alertMessage)
 			}
@@ -392,7 +392,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		matches := re.FindStringSubmatch(string(output))
 		if len(matches) < 2 {
 			log.Println("No 'Jailed until' timestamp found in script output.")
-			alertMessage := fmt.Sprintf("No 'Jailed until' timestamp found in script output.")
+			alertMessage := "No 'Jailed until' timestamp found in script output."
 			sendAlertMessage(config, alertMessage)
 			return
 		}
@@ -433,7 +433,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		matches2 := re2.FindStringSubmatch(string(output2))
 		if len(matches2) < 2 {
 			log.Println("No valid response JSON found in log message", matches2)
-			alertMessage := fmt.Sprintf("No valid response JSON found in log message")
+			alertMessage := "No valid response JSON found in log message"
 			sendAlertMessage(config, alertMessage)
 			return
 		}
@@ -457,7 +457,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 
 		if !statusOk || !responseOk || !typeOk {
 			log.Println("Failed to extract necessary fields from parsed JSON")
-			alertMessage := fmt.Sprintf("Failed to extract necessary fields from parsed JSON")
+			alertMessage := "Failed to extract necessary fields from parsed JSON"
 			sendAlertMessage(config, alertMessage)
 			return
 		}
@@ -467,10 +467,10 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		// Step 3: 조건 확인
 		if status == "ok" || responseType == "default" {
 			log.Println("Conditions met: status is ok and type is default")
-			alertMessage := fmt.Sprintf("Conditions met: status is ok and type is default")
+			alertMessage := "Conditions met: status is ok and type is default"
 			sendAlertMessage(config, alertMessage)
 		}
-		log.Printf("Re-executed unjail script output: %s", output)
+		log.Printf("Re-executed unjail script output: %s", output2)
 	}()
 }
 
@@ -521,7 +521,7 @@ func processLogEntry(logEntry LogArrayEntry, config Config) {
 		if !getAlertState("heartbeatThreshold") {
 			alertMessage := fmt.Sprintf(":red_circle: Validator %s not found in heartbeat statuses.", config.ValidatorAddress)
 			sendAlertMessage(config, alertMessage)
-			log.Printf(alertMessage)
+			log.Println(alertMessage)
 			setAlertState("heartbeatThreshold", true)
 		}
 	}
