@@ -341,6 +341,15 @@ func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
 			alertMessage := fmt.Sprintf(":red_circle: No updates for %d seconds. The hl-visor or consensus should be considered dead.", config.LogUpdateInterval)
 			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
+			cmdRestart := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s restart", "hlvisor"))
+			if output, err := cmdRestart.CombinedOutput(); err != nil {
+				log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
+				alertMessage := fmt.Sprintf("Failed to restart hl-visor: %v, output: %s", err, output)
+				sendAlertMessage(config, alertMessage)
+			}
+			log.Println("hl-visor restarted successfully.")
+			alertMessage = fmt.Sprintf(":red_circle: hl-visor restarted successfully.")
+			sendAlertMessage(config, alertMessage)
 			setAlertState("staleLogFile", true)
 		}
 	} else {
@@ -400,7 +409,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		// Calculate 10ms after the jailedUntil time
 		timeToExecute := jailedUntil.Add(10 * time.Millisecond)
 		log.Printf("Scheduled to re-execute unjail script at: %s", timeToExecute)
-
+		sendAlertMessage(config, fmt.Sprintf("Scheduled to re-execute unjail script at: %s", timeToExecute))
 		// Wait until the calculated time
 		now := time.Now()
 		if timeToExecute.After(now) {
@@ -422,7 +431,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		re2 := regexp.MustCompile(`response: (.+)$`)
 		matches2 := re2.FindStringSubmatch(string(output))
 		if len(matches2) < 2 {
-			log.Println("No valid response JSON found in log message")
+			log.Println("No valid response JSON found in log message", matches2)
 			alertMessage := fmt.Sprintf("No valid response JSON found in log message")
 			sendAlertMessage(config, alertMessage)
 			return
