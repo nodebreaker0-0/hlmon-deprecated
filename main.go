@@ -427,7 +427,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 			alertMessage := fmt.Sprintf("Failed to re-execute unjail script: %v", err)
 			sendAlertMessage(config, alertMessage)
 		}
-		log.Println(output2)
+		log.Println(string(output2))
 		// Step 1: JSON 추출
 		re2 := regexp.MustCompile(`response: (\{.*\})`)
 		matches2 := re2.FindStringSubmatch(string(output2))
