@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"time"
 
@@ -17,6 +18,10 @@ type Config struct {
 	URL             string `toml:"URL"`
 	SlackWebhookURL string `toml:"SlackWebhookURL"`
 	CheckInterval   int    `toml:"CheckInterval"`
+	HlVisorService  string `toml:"HlVisorService"`
+	HlVisorPath     string `toml:"HlVisorPath"`
+	HlNodePath      string `toml:"HlNodePath"`
+	Automode        bool   `toml:"Automode"`
 }
 
 var config Config
@@ -79,38 +84,182 @@ func checkForUpdate(url string) {
 	}
 
 	if lastModified != "" && lastModified != modified {
-		message := fmt.Sprintf("The file at %s has been updated. New Last-Modified: %s", url, modified)
-		log.Println(message)
-		sendSlackAlert(config.SlackWebhookURL, message)
-		executeUpdateCommands()
+		log.Printf("Last-Modified: %s", lastModified)
+		if config.Automode {
+			message := fmt.Sprintf(":red_circle: (FullAutoMode)The file at %s has been updated. New Last-Modified: %s", url, modified)
+			log.Println(message)
+			sendSlackAlert(config.SlackWebhookURL, message)
+			executeUpdateWithChildProcessManagement()
+		} else {
+			message := fmt.Sprintf(":red_circle: (Automatic for hlnode, manual for hlvisor MODE) The file at %s has been updated. New Last-Modified: %s", url, modified)
+			log.Println(message)
+			sendSlackAlert(config.SlackWebhookURL, message)
+			time.Sleep(5 * time.Second)
+			sendUpdateConfirmationSlackAlert()
+		}
+
 	}
 
 	lastModified = modified
-	log.Printf("Last-Modified: %s", lastModified)
 }
 
-// executeUpdateCommands runs the commands to update the hl-visor.
-func executeUpdateCommands() {
-	commands := []struct {
-		cmd   string
-		sleep time.Duration
-	}{
-		{"sudo service hlvisor stop", 5 * time.Second},
-		{"curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > /data/hl-visor", 5 * time.Second},
-		{"sudo service hlvisor start", 5 * time.Second},
-		{"sudo service hlvisor restart", 5 * time.Second},
-		{"sudo service hlvisor restart", 5 * time.Second},
+// executeUpdateWithChildProcessManagement handles the hl-visor and hl-node update safely.
+func executeUpdateWithChildProcessManagement() {
+	log.Println("Starting update process...")
+
+	// Step 1: Stop hl-visor and ensure hl-node is properly terminated
+	if err := stopHlvisorWithChildProcess(); err != nil {
+		log.Printf("Failed to stop hl-visor and its child process: %v", err)
+		return
 	}
 
-	for _, command := range commands {
-		cmd := exec.Command("/bin/sh", "-c", command.cmd)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Printf("Failed to execute command '%s': %v", command.cmd, err)
-		}
-		log.Printf("Command output: %s", output)
-		time.Sleep(command.sleep)
+	// Step 2: Download the new hl-visor binary
+	tempBinaryPath := config.HlVisorPath + "-new"
+	if err := downloadBinary(tempBinaryPath); err != nil {
+		log.Printf("Failed to download new hl-visor binary: %v", err)
+		return
 	}
+
+	// Step 3: Validate and replace the binary
+	if err := validateAndReplaceBinary(tempBinaryPath); err != nil {
+		log.Printf("Failed to validate or replace hl-visor binary: %v", err)
+		return
+	}
+
+	// Step 4: Restart hl-visor and ensure hl-node restarts correctly
+	if err := restartHlvisorAndCheckChildProcess(); err != nil {
+		log.Printf("Failed to restart hl-visor or its child process: %v", err)
+		return
+	}
+
+	log.Println("Update completed successfully.")
+	// Step 5: Send Slack alert with the updated binary timestamps
+	if err := sendUpdateConfirmationSlackAlert(); err != nil {
+		log.Printf("Failed to send update confirmation Slack alert: %v", err)
+	}
+}
+
+// sendUpdateConfirmationSlackAlert sends a Slack alert with the updated binary timestamps.
+func sendUpdateConfirmationSlackAlert() error {
+	// Execute ls -al hl-visor
+	cmdVisor := exec.Command("/bin/sh", "-c", fmt.Sprintf("ls -al %s", config.HlVisorPath))
+	visorOutput, err := cmdVisor.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to execute ls command for hl-visor: %v, output: %s", err, visorOutput)
+		return err
+	}
+
+	// Execute ls -al hl-node
+	cmdNode := exec.Command("/bin/sh", "-c", fmt.Sprintf("ls -al %s", config.HlNodePath))
+	nodeOutput, err := cmdNode.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to execute ls command for hl-node: %v, output: %s", err, nodeOutput)
+		return err
+	}
+
+	// Construct the Slack message
+	message := fmt.Sprintf(
+		":large_green_circle: Update completed successfully.\n\nUpdated binary timestamps:\n\nhl-visor:\n%s\nhl-node:\n%s",
+		string(visorOutput),
+		string(nodeOutput),
+	)
+
+	// Send the Slack alert
+	sendSlackAlert(config.SlackWebhookURL, message)
+	return nil
+}
+
+func stopHlvisorWithChildProcess() error {
+	cmdStop := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s stop", config.HlVisorService))
+	if output, err := cmdStop.CombinedOutput(); err != nil {
+		log.Printf("Failed to stop hl-visor: %v, output: %s", err, output)
+		return err
+	}
+	log.Println("hl-visor stopped successfully.")
+
+	if err := waitForProcessTermination("hl-node", 10*time.Second); err != nil {
+		log.Printf("hl-node did not terminate gracefully: %v", err)
+		return err
+	}
+	log.Println("hl-node terminated successfully.")
+	return nil
+}
+
+func downloadBinary(path string) error {
+	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > %s", path))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Failed to download binary: %v, output: %s", err, output)
+		return err
+	}
+	if err := os.Chmod(path, 0775); err != nil {
+		log.Printf("Failed to set executable permissions: %v", err)
+		return err
+	}
+	log.Println("Binary downloaded successfully.")
+	return nil
+}
+
+func validateAndReplaceBinary(tempBinaryPath string) error {
+	var output []byte
+
+	// Step 1: Validate the binary
+	cmdValidate := exec.Command("/bin/sh", "-c", fmt.Sprintf("%s --version", tempBinaryPath))
+	output, err := cmdValidate.CombinedOutput()
+	if err != nil {
+		log.Printf("Binary validation failed: %v, output: %s", err, string(output))
+		return err
+	}
+	log.Printf("Binary validated: %s", string(output))
+
+	// Step 2: Replace the binary
+	cmdReplace := exec.Command("/bin/sh", "-c", fmt.Sprintf("mv %s %s", tempBinaryPath, config.HlVisorPath))
+	output, err = cmdReplace.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to replace binary: %v, output: %s", err, string(output))
+		return err
+	}
+	log.Println("Binary replaced successfully.")
+	return nil
+}
+
+func restartHlvisorAndCheckChildProcess() error {
+	cmdRestart := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s restart", config.HlVisorService))
+	if output, err := cmdRestart.CombinedOutput(); err != nil {
+		log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
+		return err
+	}
+	log.Println("hl-visor restarted successfully.")
+
+	if err := waitForProcess("hl-node", 10*time.Second); err != nil {
+		log.Printf("hl-node did not start properly: %v", err)
+		return err
+	}
+	log.Println("hl-node restarted successfully.")
+	return nil
+}
+
+func waitForProcess(processName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("pgrep %s", processName))
+		if output, err := cmd.CombinedOutput(); err == nil && len(output) > 0 {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("process %s did not start within the timeout", processName)
+}
+
+func waitForProcessTermination(processName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("pgrep %s", processName))
+		if output, err := cmd.CombinedOutput(); err != nil || len(output) == 0 {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("process %s did not terminate within the timeout", processName)
 }
 
 func main() {
