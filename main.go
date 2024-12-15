@@ -421,15 +421,16 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		// Re-execute the script
 		log.Println("Re-executing unjail script...")
 		cmd = exec.Command("/bin/sh", unjailScriptPath)
-		output, err = cmd.CombinedOutput()
+		output2, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to re-execute unjail script: %v", err)
 			alertMessage := fmt.Sprintf("Failed to re-execute unjail script: %v", err)
 			sendAlertMessage(config, alertMessage)
 		}
+		log.Println(output2)
 		// Step 1: JSON 추출
-		re2 := regexp.MustCompile(`response: (.+)$`)
-		matches2 := re2.FindStringSubmatch(string(output))
+		re2 := regexp.MustCompile(`response: (\{.*\})`)
+		matches2 := re2.FindStringSubmatch(string(output2))
 		if len(matches2) < 2 {
 			log.Println("No valid response JSON found in log message", matches2)
 			alertMessage := fmt.Sprintf("No valid response JSON found in log message")
