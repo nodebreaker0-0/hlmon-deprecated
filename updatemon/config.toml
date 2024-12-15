@@ -1,3 +1,7 @@
 URL = "https://binaries.hyperliquid.xyz/Testnet/hl-visor"
 SlackWebhookURL = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
 CheckInterval = 600
+HlVisorService = "hlvisor"
+HlVisorPath = "/data/hl-visor"
+HlNodePath = "/data/hl-node"
+Automode = true
