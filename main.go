@@ -314,13 +314,13 @@ func main() {
 func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	// Validator is jailed
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
-		if config.ExecuteUnjail {
-			executeUnjailScript(config.UnjailScriptPath, config)
-		}
 		// Send alert only if not already triggered
 		if !getAlertState("jailedValidator") {
 			alertMessage := ":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail..."
 			sendAlertMessage(config, alertMessage)
+			if config.ExecuteUnjail {
+				executeUnjailScript(config.UnjailScriptPath, config)
+			}
 			log.Println("Validator is jailed, executing unjail script.")
 			setAlertState("jailedValidator", true) // Mark alert as triggered
 		}
@@ -407,7 +407,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		}
 
 		// Calculate 10ms after the jailedUntil time
-		timeToExecute := jailedUntil.Add(10 * time.Millisecond)
+		timeToExecute := jailedUntil.Add(100 * time.Millisecond)
 		log.Printf("Scheduled to re-execute unjail script at: %s", timeToExecute)
 		//sendAlertMessage(config, fmt.Sprintf("Scheduled to re-execute unjail script at: %s", timeToExecute))
 		// Wait until the calculated time
