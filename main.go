@@ -409,7 +409,7 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		// Calculate 10ms after the jailedUntil time
 		timeToExecute := jailedUntil.Add(10 * time.Millisecond)
 		log.Printf("Scheduled to re-execute unjail script at: %s", timeToExecute)
-		sendAlertMessage(config, fmt.Sprintf("Scheduled to re-execute unjail script at: %s", timeToExecute))
+		//sendAlertMessage(config, fmt.Sprintf("Scheduled to re-execute unjail script at: %s", timeToExecute))
 		// Wait until the calculated time
 		now := time.Now()
 		if timeToExecute.After(now) {
@@ -467,8 +467,8 @@ func executeUnjailScript(unjailScriptPath string, config Config) {
 		// Step 3: 조건 확인
 		if status == "ok" || responseType == "default" {
 			log.Println("Conditions met: status is ok and type is default")
-			alertMessage := "Conditions met: status is ok and type is default"
-			sendAlertMessage(config, alertMessage)
+			//alertMessage := "Conditions met: status is ok and type is default"
+			//sendAlertMessage(config, alertMessage)
 		}
 		log.Printf("Re-executed unjail script output: %s", output2)
 	}()
