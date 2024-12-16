@@ -314,14 +314,14 @@ func main() {
 func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	// Validator is jailed
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
+		if config.ExecuteUnjail {
+			executeUnjailScript(config.UnjailScriptPath, config)
+		}
 		// Send alert only if not already triggered
 		if !getAlertState("jailedValidator") {
 			alertMessage := ":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail..."
 			sendAlertMessage(config, alertMessage)
 			log.Println("Validator is jailed, executing unjail script.")
-			if config.ExecuteUnjail {
-				executeUnjailScript(config.UnjailScriptPath, config)
-			}
 			setAlertState("jailedValidator", true) // Mark alert as triggered
 		}
 	} else {
