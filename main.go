@@ -313,11 +313,11 @@ func main() {
 
 func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	// Validator is jailed
-	if config.ExecuteUnjail {
-		executeUnjailScript(config.UnjailScriptPath, config)
-	}
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
 		// Send alert only if not already triggered
+		if config.ExecuteUnjail {
+			executeUnjailScript(config.UnjailScriptPath, config)
+		}
 		if !getAlertState("jailedValidator") {
 			alertMessage := ":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail..."
 			sendAlertMessage(config, alertMessage)
