@@ -287,8 +287,8 @@ func main() {
 				}
 
 				// Process the last log entry only
-				processJailedValidator(logEntry, config)
 				processLogEntry(logEntry, config)
+				processJailedValidator(logEntry, config)
 				// Update last log timestamp
 				parsedTimestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestamp)
 				if err != nil {
@@ -314,10 +314,13 @@ func main() {
 func processJailedValidator(logEntry LogArrayEntry, config Config) {
 	// Validator is jailed
 	if contains(logEntry.Validator.CurrentJailedValidators, config.ValidatorAddress) {
-		// Send alert only if not already triggered
-		if config.ExecuteUnjail {
-			executeUnjailScript(config.UnjailScriptPath, config)
+		if !getAlertState("heartbeatThreshold") && !getAlertState("staleLogFile") {
+			// Send alert only if not already triggered
+			if config.ExecuteUnjail {
+				executeUnjailScript(config.UnjailScriptPath, config)
+			}
 		}
+
 		if !getAlertState("jailedValidator") {
 			alertMessage := ":red_circle: Automatic jail state due to an update or chain halt. Attempting to unjail..."
 			sendAlertMessage(config, alertMessage)
