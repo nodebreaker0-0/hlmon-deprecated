@@ -92,6 +92,8 @@ func getAlertState(key string) bool {
 
 // sendAlertMessage
 func sendAlertMessage(config Config, message string) {
+	additionalText := "Mainnet "
+	message = additionalText + message
 	if config.SlackEnabled {
 		sendSlackAlert(config.SlackWebhookURL, message)
 	}

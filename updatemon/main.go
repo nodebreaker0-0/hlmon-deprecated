@@ -29,7 +29,8 @@ var lastModified string
 
 // sendSlackAlert sends a message to a Slack channel using a webhook.
 func sendSlackAlert(webhookURL, message string) {
-	payload := map[string]string{"text": message}
+	additionalText := "Mainnet "
+	payload := map[string]string{"text": additionalText + message}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Failed to marshal Slack payload: %v", err)
