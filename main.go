@@ -345,7 +345,14 @@ func checkLogFileStaleness(lastLogTimestamp time.Time, config Config) {
 			alertMessage := fmt.Sprintf(":red_circle: No updates for %d seconds. The hl-visor or consensus should be considered dead.", config.LogUpdateInterval)
 			sendAlertMessage(config, alertMessage)
 			log.Println(alertMessage)
-			cmdRestart := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s restart", "hlvisor"))
+			cmdStop := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s stop", "hlvisor"))
+			if output, err := cmdStop.CombinedOutput(); err != nil {
+				log.Printf("Failed to Stop hl-visor: %v, output: %s", err, output)
+				alertMessage := fmt.Sprintf("Failed to Stop hl-visor: %v, output: %s", err, output)
+				sendAlertMessage(config, alertMessage)
+			}
+			time.Sleep(10 * time.Second)
+			cmdRestart := exec.Command("/bin/sh", "-c", fmt.Sprintf("sudo service %s start", "hlvisor"))
 			if output, err := cmdRestart.CombinedOutput(); err != nil {
 				log.Printf("Failed to restart hl-visor: %v, output: %s", err, output)
 				alertMessage := fmt.Sprintf("Failed to restart hl-visor: %v, output: %s", err, output)
