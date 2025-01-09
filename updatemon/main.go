@@ -187,7 +187,7 @@ func stopHlvisorWithChildProcess() error {
 }
 
 func downloadBinary(path string) error {
-	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("curl https://binaries.hyperliquid.xyz/Testnet/hl-visor > %s", path))
+	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("curl https://binaries.hyperliquid-testnet.xyz/Testnet/hl-visor > %s", path))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("Failed to download binary: %v, output: %s", err, output)
 		return err
