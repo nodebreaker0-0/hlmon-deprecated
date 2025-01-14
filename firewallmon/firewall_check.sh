@@ -31,8 +31,9 @@ if [[ -n "$aws_only" || -n "$firewall_only" ]]; then
         message+="\nIPs that are only on the firewall_ips.json:\n$firewall_only\n"
     fi
 
-    # Slack alert
-    $HOME/hl-node --chain Mainnet send-slack-alert "$message"
+    if [[ -n "$message" ]]; then
+        $HOME/hl-node --chain Mainnet send-slack-alert "$message"
+    fi
 else
     echo "Both AWS and Firewall have the same IP. No notifications are sent."
 fi
