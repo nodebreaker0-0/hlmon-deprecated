@@ -28,3 +28,10 @@ This repository contains a script to compare IP addresses between an AWS securit
 Run the script to compare IP addresses between the AWS security group and the local `firewall_ips.json` file.
 ```bash
 ./firewall_check.sh
+```
+
+### Crontab
+
+```
+0 */6 * * * /usr/local/bin/firewall_check.sh
+```
