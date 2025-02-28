@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,42 +29,43 @@ var (
 		Name: "visor_initial_height",
 		Help: "Initial height of the visor state",
 	})
-
 	height = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "visor_current_height",
 		Help: "Current height of the visor state",
 	})
-
 	scheduledFreezeHeight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "visor_scheduled_freeze_height",
 		Help: "Scheduled freeze height of the visor state (null if not scheduled)",
 	})
-
 	consensusTimestamp = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "visor_consensus_timestamp_unix",
 		Help: "Consensus timestamp in Unix format",
 	})
-
 	mutex sync.Mutex
 )
 
-// RFC3339Nano 타임존 추가 및 포맷 보정 함수
+// normalizeTime는 시간 문자열을 RFC3339Nano 포맷에 맞게 보정합니다.
+// 1. 소수점 이하 자릿수가 10자리 이상이면 9자리로 줄입니다.
+// 2. 문자열 끝에 타임존 정보(Z 또는 ±HH:MM)가 없으면 "Z"를 추가합니다.
 func normalizeTime(timeStr string) string {
-	// 마이크로초 정규식 (10자리 이상이면 9자리로 줄임)
-	re := regexp.MustCompile(`\.\d{10,}`) // 10자리 이상의 마이크로초 찾기
-	timeStr = re.ReplaceAllStringFunc(timeStr, func(match string) string {
-		return match[:10] // 최대 9자리까지만 유지
+	// 소수점 이하 10자리 이상인 경우 9자리로 줄이는 정규식 처리
+	reFraction := regexp.MustCompile(`\.(\d{10,})`)
+	timeStr = reFraction.ReplaceAllStringFunc(timeStr, func(match string) string {
+		// match는 "." 포함 숫자들. 최대 10글자(점 포함 1+9자리)로 자릅니다.
+		if len(match) > 10 {
+			return match[:10]
+		}
+		return match
 	})
 
-	// UTC 오프셋(Z, ±hh:mm)이 없으면 "Z" 추가
-	if !strings.HasSuffix(timeStr, "Z") && !strings.Contains(timeStr, "+") && !strings.Contains(timeStr, "-") {
+	// 마지막에 타임존 정보가 있는지 검사 (Z 또는 +HH:MM 또는 -HH:MM)
+	reTZ := regexp.MustCompile(`(Z|[+-]\d{2}:\d{2})$`)
+	if !reTZ.MatchString(timeStr) {
 		timeStr += "Z"
 	}
-
 	return timeStr
 }
 
-// JSON 파일을 읽고 메트릭을 업데이트하는 함수
 func updateMetrics(filePath string) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -85,14 +85,13 @@ func updateMetrics(filePath string) {
 	// 메트릭 업데이트
 	initialHeight.Set(state.InitialHeight)
 	height.Set(state.Height)
-
 	if state.ScheduledFreeze != nil {
 		scheduledFreezeHeight.Set(*state.ScheduledFreeze)
 	} else {
-		scheduledFreezeHeight.Set(0) // NULL 값일 경우 0으로 설정
+		scheduledFreezeHeight.Set(0)
 	}
 
-	// Consensus Time을 Unix Timestamp로 변환 (UTC 타임존이 없는 경우 추가)
+	// consensus_time 정규화 및 파싱
 	normalizedTime := normalizeTime(state.ConsensusTime)
 	parsedTime, err := time.Parse(time.RFC3339Nano, normalizedTime)
 	if err != nil {
@@ -105,18 +104,17 @@ func updateMetrics(filePath string) {
 }
 
 func main() {
-	// 실행 시 사용할 파일 경로 및 포트 플래그 추가
+	// 파일 경로와 포트를 인자로 받음
 	filePath := flag.String("file", "visor_abci_state.json", "Path to the visor JSON file")
 	port := flag.Int("port", 8080, "Port number for the exporter HTTP server")
 	flag.Parse()
 
-	// Prometheus에 메트릭 등록
 	prometheus.MustRegister(initialHeight)
 	prometheus.MustRegister(height)
 	prometheus.MustRegister(scheduledFreezeHeight)
 	prometheus.MustRegister(consensusTimestamp)
 
-	// 10초마다 JSON 파일 읽기
+	// 10초마다 JSON 파일 읽어 업데이트
 	go func() {
 		for {
 			updateMetrics(*filePath)
@@ -124,13 +122,10 @@ func main() {
 		}
 	}()
 
-	// `/metrics` 엔드포인트 제공
 	http.Handle("/metrics", promhttp.Handler())
 
-	// HTTP 서버 시작
 	serverAddr := fmt.Sprintf(":%d", *port)
 	log.Printf("Prometheus Exporter is running on %s, reading file: %s\n", serverAddr, *filePath)
-
 	if err := http.ListenAndServe(serverAddr, nil); err != nil {
 		log.Fatalf("Error starting HTTP server: %v", err)
 	}
