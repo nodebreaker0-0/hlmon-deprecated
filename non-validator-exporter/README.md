@@ -1,0 +1,1 @@
+./visor_exporter -file /path/to/visor_abci_state.json -port 9000
