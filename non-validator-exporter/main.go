@@ -51,14 +51,16 @@ var (
 
 // RFC3339Nano 타임존 추가 및 포맷 보정 함수
 func normalizeTime(timeStr string) string {
+	// 마이크로초 정규식 (10자리 이상이면 9자리로 줄임)
+	re := regexp.MustCompile(`\.\d{10,}`) // 10자리 이상의 마이크로초 찾기
+	timeStr = re.ReplaceAllStringFunc(timeStr, func(match string) string {
+		return match[:10] // 최대 9자리까지만 유지
+	})
+
 	// UTC 오프셋(Z, ±hh:mm)이 없으면 "Z" 추가
 	if !strings.HasSuffix(timeStr, "Z") && !strings.Contains(timeStr, "+") && !strings.Contains(timeStr, "-") {
 		timeStr += "Z"
 	}
-
-	// 정규식을 사용하여 마이크로초 자릿수 조정 (RFC3339Nano는 최대 9자리 지원)
-	re := regexp.MustCompile(`\.\d{10,}`)                            // 10자리 이상의 마이크로초 찾기
-	timeStr = re.ReplaceAllString(timeStr, timeStr[:len(timeStr)-1]) // 9자리까지만 유지
 
 	return timeStr
 }
