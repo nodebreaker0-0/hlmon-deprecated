@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,15 @@ var (
 	mutex sync.Mutex
 )
 
+// RFC3339Nano 타임존 추가 함수
+func normalizeTime(timeStr string) string {
+	if !strings.HasSuffix(timeStr, "Z") && !strings.Contains(timeStr, "+") && !strings.Contains(timeStr, "-") {
+		// UTC 오프셋이 없는 경우, 기본적으로 "Z" (UTC) 추가
+		return timeStr + "Z"
+	}
+	return timeStr
+}
+
 // JSON 파일을 읽고 메트릭을 업데이트하는 함수
 func updateMetrics(filePath string) {
 	mutex.Lock()
@@ -74,10 +84,11 @@ func updateMetrics(filePath string) {
 		scheduledFreezeHeight.Set(0) // NULL 값일 경우 0으로 설정
 	}
 
-	// Consensus Time을 Unix Timestamp로 변환
-	parsedTime, err := time.Parse(time.RFC3339Nano, state.ConsensusTime)
+	// Consensus Time을 Unix Timestamp로 변환 (UTC 타임존이 없는 경우 추가)
+	normalizedTime := normalizeTime(state.ConsensusTime)
+	parsedTime, err := time.Parse(time.RFC3339Nano, normalizedTime)
 	if err != nil {
-		log.Printf("Error parsing consensus time: %v", err)
+		log.Printf("Error parsing consensus time: %v (normalized: %s)", err, normalizedTime)
 	} else {
 		consensusTimestamp.Set(float64(parsedTime.Unix()))
 	}
