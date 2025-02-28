@@ -57,10 +57,8 @@ func normalizeTime(timeStr string) string {
 	}
 
 	// 정규식을 사용하여 마이크로초 자릿수 조정 (RFC3339Nano는 최대 9자리 지원)
-	re := regexp.MustCompile(`\.\d{10,}`)
-	timeStr = re.ReplaceAllString(timeStr, func(match string) string {
-		return match[:10] // 최대 9자리까지만 유지
-	})
+	re := regexp.MustCompile(`\.\d{10,}`)                            // 10자리 이상의 마이크로초 찾기
+	timeStr = re.ReplaceAllString(timeStr, timeStr[:len(timeStr)-1]) // 9자리까지만 유지
 
 	return timeStr
 }
