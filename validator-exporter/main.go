@@ -22,64 +22,36 @@ import (
 )
 
 var (
-	consensusPath    = flag.String("consensus-path", "", "Base path for consensus log files (required)")
-	statusPath       = flag.String("status-path", "", "Base path for status log files (required)")
-	validatorAddress = flag.String("validator-address", "", "Your validator address (required)")
-	logLevel         = flag.String("log-level", "info", "Log level: debug, info, warn")
-
-	LastVoteRound = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "validator_vote_last_round",
-			Help: "Last round number this validator voted in",
-		},
-		[]string{"validator"},
-	)
-
-	CurrentRound = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "current_round",
-			Help: "Most recent consensus round observed from block messages",
-		},
-	)
-
-	DisconnectedValidator = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "validator_disconnected",
-			Help: "Whether a validator is disconnected from peer (1=disconnected)",
-		},
-		[]string{"source", "target", "last_round"},
-	)
-
-	AckDelaySeconds = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "validator_heartbeat_ack_delay_seconds",
-			Help: "Time in seconds between sending a heartbeat and receiving ack, per validator",
-		},
-		[]string{"validator"},
-	)
+	consensusPath         = flag.String("consensus-path", "", "Base path for consensus log files (required)")
+	statusPath            = flag.String("status-path", "", "Base path for status log files (required)")
+	validatorAddress      = flag.String("validator-address", "", "Your validator address (required)")
+	logLevel              = flag.String("log-level", "info", "Log level: debug, info, warn")
+	LastVoteRound         = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_vote_last_round", Help: "Last round number this validator voted in"}, []string{"validator"})
+	CurrentRound          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "current_round", Help: "Most recent consensus round observed from block messages"})
+	DisconnectedValidator = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_disconnected", Help: "Whether a validator is disconnected from peer (1=disconnected)"}, []string{"source", "target", "last_round"})
+	AckDelaySeconds       = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_heartbeat_ack_delay_seconds", Help: "Time in seconds between sending a heartbeat and receiving ack, per validator"}, []string{"validator"})
 )
 
-var heartbeatSent sync.Map
-var delayedSince sync.Map
-var currentRoundMu sync.Mutex
-var shortAddress string
+var (
+	heartbeatSent  sync.Map
+	delayedSince   sync.Map
+	currentRoundMu sync.Mutex
+	shortAddress   string
+)
 
 func logDebug(format string, args ...interface{}) {
 	if *logLevel == "debug" {
 		log.Printf("[DEBUG] "+format, args...)
 	}
 }
-
 func logInfo(format string, args ...interface{}) {
 	if *logLevel == "debug" || *logLevel == "info" {
 		log.Printf("[INFO] "+format, args...)
 	}
 }
-
 func logWarn(format string, args ...interface{}) {
 	log.Printf("[WARN] "+format, args...)
 }
-
 func shortenAddress(addr string) string {
 	if len(addr) < 10 {
 		return addr
@@ -130,13 +102,14 @@ func TailLogFile(path string, callback func(string)) {
 
 func HandleConsensusLine(line string) {
 	logDebug("Raw line: %s", line)
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(line)))
+	decoder.UseNumber()
 
 	var entry []interface{}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &entry); err != nil || len(entry) < 2 {
+	if err := decoder.Decode(&entry); err != nil || len(entry) < 2 {
 		logWarn("Invalid consensus line: %v | Error: %v", line, err)
 		return
 	}
-
 	inner, ok := entry[1].([]interface{})
 	if !ok || len(inner) != 2 {
 		logWarn("Unexpected consensus format: %v", entry)
@@ -148,7 +121,6 @@ func HandleConsensusLine(line string) {
 		logWarn("Invalid consensus content structure: %v", inner[1])
 		return
 	}
-
 	if rawMsg, exists := content["msg"]; exists {
 		if nestedMsg, ok := rawMsg.(map[string]interface{}); ok {
 			content = nestedMsg
@@ -165,11 +137,10 @@ func HandleConsensusLine(line string) {
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
 				if ok && hb["validator"].(string) == shortAddress {
-					rid := fmt.Sprintf("%.0f", hb["random_id"].(float64))
+					rid := hb["random_id"].(json.Number).String()
 					heartbeatSent.Store(rid, now)
 				}
 			}
-
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
 			if direction == "in" {
@@ -178,7 +149,7 @@ func HandleConsensusLine(line string) {
 					logWarn("Invalid HeartbeatAck (in): %v", value)
 					continue
 				}
-				rid := fmt.Sprintf("%.0f", ack["random_id"].(float64))
+				rid := ack["random_id"].(json.Number).String()
 				validator := ack["validator"].(string)
 
 				if sent, ok := heartbeatSent.Load(rid); ok {
@@ -187,7 +158,6 @@ func HandleConsensusLine(line string) {
 					heartbeatSent.Delete(rid)
 				}
 			}
-
 		case "Vote":
 			logDebug("Found Vote, direction=%s", direction)
 			if direction == "out" {
@@ -198,20 +168,32 @@ func HandleConsensusLine(line string) {
 				}
 				validator := vote["validator"].(string)
 				if validator == shortAddress {
-					round := vote["round"].(float64)
-					LastVoteRound.WithLabelValues(validator).Set(round)
+					round := vote["round"].(json.Number)
+					r, _ := round.Int64()
+					LastVoteRound.WithLabelValues(validator).Set(float64(r))
 				}
 			}
 		case "Block":
 			logDebug("Found Block")
-			msg, ok := value.(map[string]interface{})["Block"].(map[string]interface{})
-			if ok {
-				if r, ok := msg["round"].(float64); ok {
-					currentRoundMu.Lock()
-					CurrentRound.Set(r)
-					currentRoundMu.Unlock()
-				}
+			blockContainer, ok := value.(map[string]interface{})
+			if !ok {
+				logWarn("Block container invalid: %v", value)
+				break
 			}
+			blockData, ok := blockContainer["Block"].(map[string]interface{})
+			if !ok {
+				logWarn("Missing Block field: %v", blockContainer)
+				break
+			}
+			round, ok := blockData["round"].(json.Number)
+			if !ok {
+				logWarn("Block round missing or not number: %v", blockData)
+				break
+			}
+			r, _ := round.Int64()
+			currentRoundMu.Lock()
+			CurrentRound.Set(float64(r))
+			currentRoundMu.Unlock()
 		default:
 			logDebug("Unknown key in consensus content: %s", key)
 		}
@@ -264,14 +246,8 @@ func HandleStatusLine(line string) {
 func main() {
 	flag.Parse()
 
-	if *validatorAddress == "" {
-		log.Fatal("--validator-address is required")
-	}
-	if *consensusPath == "" {
-		log.Fatal("--consensus-path is required")
-	}
-	if *statusPath == "" {
-		log.Fatal("--status-path is required")
+	if *validatorAddress == "" || *consensusPath == "" || *statusPath == "" {
+		log.Fatal("All flags --validator-address, --consensus-path, and --status-path are required")
 	}
 
 	shortAddress = shortenAddress(*validatorAddress)
@@ -281,12 +257,15 @@ func main() {
 	prometheus.MustRegister(CurrentRound)
 	prometheus.MustRegister(DisconnectedValidator)
 	prometheus.MustRegister(AckDelaySeconds)
+	logInfo("✅ Prometheus metrics registered")
 
 	go func() {
 		for {
 			path := getLatestHourlyFile(*consensusPath)
 			if path != "" {
 				TailLogFile(path, HandleConsensusLine)
+			} else {
+				logWarn("No consensus file found at %s", *consensusPath)
 			}
 			time.Sleep(10 * time.Second)
 		}
@@ -297,6 +276,8 @@ func main() {
 			path := getLatestHourlyFile(*statusPath)
 			if path != "" {
 				ScanStatusFile(path)
+			} else {
+				logWarn("No status file found at %s", *statusPath)
 			}
 			time.Sleep(60 * time.Second)
 		}
