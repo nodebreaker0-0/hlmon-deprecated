@@ -114,8 +114,8 @@ func main() {
 	log.Printf("Tailing log file: %s", logFilePath)
 
 	// 라인 처리를 위한 채널 및 다수의 워커 고루틴 실행
-	lineCh := make(chan string, 1000)
-	const numWorkers = 4
+	lineCh := make(chan string, 10000)
+	const numWorkers = 16
 	for i := 0; i < numWorkers; i++ {
 		go func() {
 			for line := range lineCh {
