@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	heartbeatAckDelay = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Name:    "heartbeat_ack_delay_ms",
-			Help:    "Delay in ms between sent heartbeat and received ack",
-			Buckets: prometheus.ExponentialBuckets(1, 2, 15), // 1ms ~ 16s
+	heartbeatAckDelayByPeer = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "heartbeat_ack_delay_ms",
+			Help: "Delay in ms between sent heartbeat and ack received, by peer",
 		},
+		[]string{"peer"},
 	)
 
 	lastVotedRoundGauge = prometheus.NewGaugeFunc(
@@ -33,7 +33,7 @@ var (
 )
 
 func registerMetrics() {
-	prometheus.MustRegister(heartbeatAckDelay)
+	prometheus.MustRegister(heartbeatAckDelayByPeer)
 	prometheus.MustRegister(lastVotedRoundGauge)
 	prometheus.MustRegister(currentRoundGauge)
 }

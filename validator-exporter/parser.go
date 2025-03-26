@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -38,15 +39,12 @@ func handleHeartbeatSentFromLine(data string, ts time.Time, shortAddr string) {
 	for _, inner := range wrapper {
 		hb := inner["Heartbeat"]
 		heartbeatSent.Store(hb.RandomID, ts)
+		log.Printf("[hb] Stored heartbeat: random_id=%d round=%d", hb.RandomID, hb.Round)
 		break
 	}
 }
 
 func handleHeartbeatAckFromLine(data string, ts time.Time, shortAddr string) {
-	if !strings.Contains(data, shortAddr) {
-		return
-	}
-
 	var wrapper map[string]map[string]HeartbeatAck
 	if err := json.Unmarshal([]byte(data), &wrapper); err != nil {
 		return
@@ -56,8 +54,10 @@ func handleHeartbeatAckFromLine(data string, ts time.Time, shortAddr string) {
 		if sentTimeRaw, ok := heartbeatSent.Load(hba.RandomID); ok {
 			sentTime := sentTimeRaw.(time.Time)
 			delay := ts.Sub(sentTime).Milliseconds()
-			heartbeatAckDelay.Observe(float64(delay))
+			peer := hba.Validator
+			heartbeatAckDelayByPeer.WithLabelValues(peer).Set(float64(delay))
 			heartbeatSent.Delete(hba.RandomID)
+			log.Printf("[ack] Ack delay from %s: %dms (random_id=%d)", peer, delay, hba.RandomID)
 		}
 		break
 	}
@@ -85,6 +85,7 @@ func handleVoteFromLine(data string, shortAddr string) {
 		round, ok := voteData["round"].(float64)
 		if ok {
 			lastVotedRound.Set(int64(round))
+			log.Printf("[vote] Round: %d", int64(round))
 		}
 	}
 }
@@ -104,6 +105,7 @@ func handleCurrentRoundFromLine(data string) {
 		round, ok := blockData["round"].(float64)
 		if ok {
 			currentRound.Set(int64(round))
+			log.Printf("[round] Current round: %d", int64(round))
 		}
 	}
 }
