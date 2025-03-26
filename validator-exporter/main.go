@@ -24,7 +24,7 @@ type heartbeatInfo struct {
 }
 
 var (
-	// Vote, Block, Heartbeat 관련 메트릭
+	// 기존 메트릭들
 	lastVoteRound = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "validator_last_vote_round",
 		Help: "Last vote round number for the validator",
@@ -40,7 +40,6 @@ var (
 		},
 		[]string{"validator"},
 	)
-	// 메트릭 업데이트 타임스탬프
 	lastVoteRoundUpdateTs = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "validator_last_vote_round_update_ts",
 		Help: "Timestamp when validator_last_vote_round was last updated",
@@ -56,24 +55,20 @@ var (
 		},
 		[]string{"validator"},
 	)
-	// 최근 두 vote 메시지 간의 round 차이
-	voteRoundDiff = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "vote_round_diff",
-		Help: "Difference between the two most recent vote round values for the validator",
+
+	// 새롭게 추가할 vote 시간 차이 메트릭 (초 단위)
+	voteTimeDiff = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "vote_time_diff_seconds",
+		Help: "Time difference in seconds between the timestamp of the last vote and the current time",
 	})
-)
 
-// 전역 변수: 최근 vote round 값을 추적 (초기값 0)
-var (
-	lastVoteRoundVal     int64 = 0
-	previousVoteRoundVal int64 = 0
-)
-
-// heartbeatMap: key는 random_id 문자열, 값은 heartbeatInfo 구조체.
-var (
+	// heartbeatMap: key는 random_id 문자열, 값은 heartbeatInfo 구조체.
 	heartbeatMap      = make(map[string]*heartbeatInfo)
 	heartbeatMapMutex sync.Mutex
 )
+
+// 마지막 vote 메시지의 타임스탬프를 저장하는 전역 변수
+var lastVoteTime time.Time
 
 func main() {
 	// 플래그 파싱
@@ -88,9 +83,20 @@ func main() {
 	// 단축형 주소 생성 (예: "0xef22..d5ac")
 	shortValidator := shortenAddress(*validatorAddrFull)
 
-	// Prometheus 메트릭 등록 (vote_round_diff 메트릭 포함)
+	// Prometheus 메트릭 등록 (새 메트릭 포함)
 	prometheus.MustRegister(lastVoteRound, currentRound, heartbeatAckDelayVec,
-		lastVoteRoundUpdateTs, currentRoundUpdateTs, heartbeatAckUpdateTsVec, voteRoundDiff)
+		lastVoteRoundUpdateTs, currentRoundUpdateTs, heartbeatAckUpdateTsVec, voteTimeDiff)
+
+	// vote_time_diff_seconds 갱신 고루틴
+	go func() {
+		for {
+			time.Sleep(1 * time.Second)
+			if !lastVoteTime.IsZero() {
+				diff := time.Since(lastVoteTime).Seconds()
+				voteTimeDiff.Set(diff)
+			}
+		}
+	}()
 
 	// HTTP server를 통해 메트릭 노출 (포트 2112)
 	go func() {
@@ -180,7 +186,7 @@ func tailFile(filePath string, lineCh chan<- string) {
 
 // processLogLine parses a single JSON log line and updates Prometheus metrics accordingly.
 func processLogLine(line string, shortValidator string) {
-	// 로그 라인은 JSON 배열로 되어 있음:
+	// 로그 라인은 JSON 배열 형태임:
 	// [
 	//   "2025-03-26T11:13:15.591117076",
 	//   ["in" 또는 "out", { ... }]
@@ -228,18 +234,11 @@ func processLogLine(line string, shortValidator string) {
 				validator, ok := voteData["validator"].(string)
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
-						// 이전 vote round 값 업데이트
-						previousVoteRoundVal = lastVoteRoundVal
-						lastVoteRoundVal = int64(roundVal)
-						lastVoteRound.Set(float64(lastVoteRoundVal))
+						// Vote가 들어올 때마다 마지막 vote 타임 업데이트
+						lastVoteTime = timestamp
+						lastVoteRound.Set(float64(int64(roundVal)))
 						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
-						if previousVoteRoundVal != 0 {
-							diff := lastVoteRoundVal - previousVoteRoundVal
-							voteRoundDiff.Set(float64(diff))
-							log.Printf("[Vote] New vote round=%d, previous=%d, diff=%d", lastVoteRoundVal, previousVoteRoundVal, diff)
-						} else {
-							log.Printf("[Vote] First vote round=%d", lastVoteRoundVal)
-						}
+						log.Printf("[Vote] Received vote: round=%d, timestamp=%v", int64(roundVal), timestamp)
 					}
 				}
 			}
@@ -263,7 +262,6 @@ func processLogLine(line string, shortValidator string) {
 		if ok {
 			validator, ok := hbMap["validator"].(string)
 			if ok && validator == shortValidator {
-				// random_id만 키로 사용
 				randID, ok1 := hbMap["random_id"].(float64)
 				if ok1 {
 					key := fmt.Sprintf("%d", int64(randID))
@@ -282,9 +280,6 @@ func processLogLine(line string, shortValidator string) {
 	}
 
 	// --- HeartbeatAck 메시지 처리 ---
-	// HeartbeatAck 메시지는 두 가지 형태로 올 수 있음:
-	// 1. msgObj["HeartbeatAck"]
-	// 2. msgObj["msg"] 안에 {"HeartbeatAck":{...}}
 	var ackContent interface{}
 	if val, exists := msgObj["HeartbeatAck"]; exists {
 		ackContent = val
@@ -301,7 +296,6 @@ func processLogLine(line string, shortValidator string) {
 			log.Printf("[HeartbeatAck In] Ack content not a map")
 			return
 		}
-		// random_id만 매칭 (round 무시)
 		randID, ok1 := ackMap["random_id"].(float64)
 		if ok1 {
 			key := fmt.Sprintf("%d", int64(randID))
@@ -314,7 +308,6 @@ func processLogLine(line string, shortValidator string) {
 					heartbeatMapMutex.Unlock()
 					return
 				}
-				// 중복 ack인지 체크 (같은 validator가 이미 응답했는지)
 				if _, alreadyAcked := hbInfo.acks[src]; alreadyAcked {
 					log.Printf("[HeartbeatAck In] Duplicate ack from validator=%s for random_id=%s", src, key)
 				} else {
