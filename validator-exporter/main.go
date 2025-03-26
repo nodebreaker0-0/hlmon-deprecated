@@ -138,8 +138,8 @@ func HandleConsensusLine(line string) {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
 				if ok {
 					val := hb["validator"].(string)
-					// Compare with both prefix and suffix to handle shortened format like 0xef22..d5ac
-					if strings.HasPrefix(*validatorAddress, val[:6]) && strings.HasSuffix(*validatorAddress, val[len(val)-4:]) {
+					// Use shortAddress matching logic for shortened format
+					if strings.HasPrefix(val, shortAddress[:6]) && strings.HasSuffix(val, shortAddress[len(shortAddress)-4:]) {
 						rid := hb["random_id"].(json.Number).String()
 						heartbeatSent.Store(rid, now)
 						logDebug("Stored heartbeat random_id=%s", rid)
