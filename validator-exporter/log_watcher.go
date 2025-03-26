@@ -28,15 +28,15 @@ func startLogWatcher(shortAddr, basePath string) {
 				continue
 			}
 
-			log.Println("[watcher] Using latest dir:", latestDir)
-
-			for hour := 0; hour < 24; hour++ {
-				filePath := filepath.Join(latestDir, strconv.Itoa(hour))
-				if _, err := os.Stat(filePath); err == nil {
-					log.Printf("[tail] Starting tail on file: %s", filePath)
-					go tailFile(filePath, shortAddr)
-				}
+			hourFile := findLatestHourFile(latestDir)
+			if hourFile == "" {
+				log.Println("[watcher] No hour file found in latest dir")
+				time.Sleep(3 * time.Second)
+				continue
 			}
+
+			log.Printf("[tail] Starting tail on latest file: %s", hourFile)
+			go tailFile(hourFile, shortAddr)
 
 			time.Sleep(30 * time.Second)
 		}
@@ -57,14 +57,33 @@ func findLatestLogDir(base string) string {
 
 	for _, dateDir := range dateDirs {
 		path := filepath.Join(base, dateDir.Name())
-		hourDirs, err := os.ReadDir(path)
-		if err != nil || len(hourDirs) == 0 {
-			continue
-		}
-		latest = path
-		break
+		return path // 가장 최신 날짜 디렉토리 1개만
 	}
 	return latest
+}
+
+func findLatestHourFile(dir string) string {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		log.Println("[watcher] Failed to read hour dir:", err)
+		return ""
+	}
+
+	max := -1
+	for _, f := range files {
+		if !f.Type().IsRegular() {
+			continue
+		}
+		name := f.Name()
+		hour, err := strconv.Atoi(name)
+		if err == nil && hour > max {
+			max = hour
+		}
+	}
+	if max == -1 {
+		return ""
+	}
+	return filepath.Join(dir, strconv.Itoa(max))
 }
 
 func tailFile(path, shortAddr string) {
@@ -91,6 +110,9 @@ func tailFile(path, shortAddr string) {
 		}
 
 		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[") {
+			continue // 잘못된 형식 스킵
+		}
 		log.Printf("[parse] Raw log: %s", trimmed)
 		go parseLogLine(trimmed, shortAddr)
 	}
@@ -111,7 +133,8 @@ func parseLogLine(line, shortAddr string) {
 		log.Println("[parse] Invalid timestamp in log line")
 		return
 	}
-	ts, err := time.Parse(time.RFC3339Nano, tsStr)
+
+	ts, err := time.Parse("2006-01-02T15:04:05.999999999", tsStr)
 	if err != nil {
 		log.Println("[parse] Timestamp parse error:", err)
 		return
