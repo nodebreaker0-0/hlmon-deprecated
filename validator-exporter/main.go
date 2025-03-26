@@ -155,8 +155,8 @@ func HandleConsensusLine(line string) {
 
 				if sent, ok := heartbeatSent.Load(rid); ok {
 					delay := now - sent.(float64)
+					logDebug("HeartbeatAck match: validator=%s rid=%s delay=%.3fs", validator, rid, delay)
 					AckDelaySeconds.WithLabelValues(validator).Set(delay)
-					heartbeatSent.Delete(rid)
 				} else {
 					logDebug("No matching heartbeatSent found for rid=%s", rid)
 				}
