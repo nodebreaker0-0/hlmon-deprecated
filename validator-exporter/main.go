@@ -34,11 +34,22 @@ var (
 		},
 		[]string{"validator"},
 	)
-)
-
-// global round values protected by mutex
-var (
-	roundsMu sync.Mutex
+	// 각 메트릭의 마지막 업데이트 타임스탬프 (Unix seconds)
+	lastVoteRoundUpdateTs = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "validator_last_vote_round_update_ts",
+		Help: "Timestamp when validator_last_vote_round was last updated",
+	})
+	currentRoundUpdateTs = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "current_round_update_ts",
+		Help: "Timestamp when current_round was last updated",
+	})
+	heartbeatAckUpdateTsVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "heartbeat_ack_delay_update_ts",
+			Help: "Timestamp when heartbeat_ack_delay_ms was last updated for each validator",
+		},
+		[]string{"validator"},
+	)
 )
 
 // heartbeat tracking (for outgoing heartbeat messages)
@@ -61,8 +72,9 @@ func main() {
 	// 단축형 주소 생성 (예: "0xef22..d5ac")
 	shortValidator := shortenAddress(*validatorAddrFull)
 
-	// Prometheus 메트릭 등록
-	prometheus.MustRegister(lastVoteRound, currentRound, heartbeatAckDelayVec)
+	// Prometheus 메트릭 등록 (업데이트 타임스탬프 메트릭 포함)
+	prometheus.MustRegister(lastVoteRound, currentRound, heartbeatAckDelayVec,
+		lastVoteRoundUpdateTs, currentRoundUpdateTs, heartbeatAckUpdateTsVec)
 
 	// HTTP server를 통해 메트릭 노출 (포트 2112)
 	go func() {
@@ -180,6 +192,8 @@ func processLogLine(line string, shortValidator string) {
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
 						lastVoteRound.Set(roundVal)
+						// 업데이트 시각을 Unix 타임스탬프로 기록
+						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
 					}
 				}
 			}
@@ -192,6 +206,8 @@ func processLogLine(line string, shortValidator string) {
 		if ok {
 			if roundVal, ok := blockMap["round"].(float64); ok {
 				currentRound.Set(roundVal)
+				// 업데이트 시각을 기록
+				currentRoundUpdateTs.Set(float64(time.Now().Unix()))
 			}
 		}
 	}
@@ -245,7 +261,9 @@ func processLogLine(line string, shortValidator string) {
 				src, okSrc := msgObj["source"].(string)
 				if okSrc {
 					heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
+					heartbeatAckUpdateTsVec.WithLabelValues(src).Set(float64(time.Now().Unix()))
 				}
+				// 처리 완료 후 heartbeatMap에서 제거
 				delete(heartbeatMap, key)
 			}
 			heartbeatMapMutex.Unlock()
