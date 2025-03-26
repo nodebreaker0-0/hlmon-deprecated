@@ -171,13 +171,16 @@ func HandleConsensusLine(line string) {
 			}
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
-			hb, ok := value.(map[string]interface{})["heartbeat_ack"].(map[string]interface{})
+			hbRaw, ok := value.(map[string]interface{})
 			if !ok {
 				logWarn("Invalid HeartbeatAck format: %v", value)
 				continue
 			}
-			validator := hb["validator"].(string)
-			rid := fmt.Sprintf("%.0f", hb["random_id"].(float64))
+
+			validator, _ := hbRaw["validator"].(string)
+			//round := fmt.Sprintf("%.0f", hbRaw["round"].(float64))
+			rid := fmt.Sprintf("%.0f", hbRaw["random_id"].(float64))
+
 			if direction == "in" {
 				if sent, ok := heartbeatSent.Load(rid); ok {
 					delay := now - sent.(float64)
