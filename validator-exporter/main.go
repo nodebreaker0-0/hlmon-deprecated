@@ -141,23 +141,29 @@ func HandleConsensusLine(line string) {
 					heartbeatSent.Store(rid, now)
 				}
 			}
+
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
 			if direction == "in" {
-				ack, ok := value.(map[string]interface{})
+				ackWrap, ok := value.(map[string]interface{})
 				if !ok {
-					logWarn("Invalid HeartbeatAck (in): %v", value)
+					logWarn("Invalid ack wrapper: %v", value)
+					continue
+				}
+				ack, ok := ackWrap["HeartbeatAck"].(map[string]interface{})
+				if !ok {
+					logWarn("Missing HeartbeatAck field in in-msg: %v", ackWrap)
 					continue
 				}
 				rid := ack["random_id"].(json.Number).String()
 				validator := ack["validator"].(string)
-
 				if sent, ok := heartbeatSent.Load(rid); ok {
 					delay := now - sent.(float64)
 					AckDelaySeconds.WithLabelValues(validator).Set(delay)
 					heartbeatSent.Delete(rid)
 				}
 			}
+
 		case "Vote":
 			logDebug("Found Vote, direction=%s", direction)
 			if direction == "out" {
