@@ -137,15 +137,9 @@ func HandleConsensusLine(line string) {
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
 				if ok {
-					val := hb["validator"].(string)
-					// Use shortAddress matching logic for shortened format
-					if strings.HasPrefix(val, shortAddress[:6]) && strings.HasSuffix(val, shortAddress[len(shortAddress)-4:]) {
-						rid := hb["random_id"].(json.Number).String()
-						heartbeatSent.Store(rid, now)
-						logDebug("Stored heartbeat random_id=%s", rid)
-					} else {
-						logDebug("Heartbeat skipped (validator mismatch): val=%s", val)
-					}
+					rid := hb["random_id"].(json.Number).String()
+					heartbeatSent.Store(rid, now)
+					logDebug("Stored heartbeat random_id=%s", rid)
 				}
 			}
 
@@ -171,18 +165,16 @@ func HandleConsensusLine(line string) {
 
 		case "Vote":
 			logDebug("Found Vote, direction=%s", direction)
-			if direction == "out" {
-				vote, ok := value.(map[string]interface{})["vote"].(map[string]interface{})
-				if !ok {
-					logWarn("Invalid vote format: %v", value)
-					continue
-				}
-				validator := vote["validator"].(string)
-				if validator == shortAddress {
-					round := vote["round"].(json.Number)
-					r, _ := round.Int64()
-					LastVoteRound.WithLabelValues(validator).Set(float64(r))
-				}
+			vote, ok := value.(map[string]interface{})["vote"].(map[string]interface{})
+			if !ok {
+				logWarn("Invalid vote format: %v", value)
+				continue
+			}
+			validator := vote["validator"].(string)
+			if strings.HasSuffix(*validatorAddress, validator[len(validator)-4:]) {
+				round := vote["round"].(json.Number)
+				r, _ := round.Int64()
+				LastVoteRound.WithLabelValues(validator).Set(float64(r))
 			}
 		case "Block":
 			logDebug("Found Block")
