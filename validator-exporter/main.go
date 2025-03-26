@@ -100,6 +100,8 @@ func TailLogFile(path string, callback func(string)) {
 	}
 }
 
+// ... (imports and setup remain unchanged)
+
 func HandleConsensusLine(line string) {
 	logDebug("Raw line: %s", line)
 	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(line)))
@@ -158,6 +160,7 @@ func HandleConsensusLine(line string) {
 					delay := now - sent.(float64)
 					logDebug("HeartbeatAck match: validator=%s rid=%s delay=%.3fs", validator, rid, delay)
 					AckDelaySeconds.WithLabelValues(validator).Set(delay)
+					heartbeatSent.Delete(rid)
 				} else {
 					logDebug("No matching heartbeatSent found for rid=%s", rid)
 				}
@@ -175,7 +178,9 @@ func HandleConsensusLine(line string) {
 				round := vote["round"].(json.Number)
 				r, _ := round.Int64()
 				LastVoteRound.WithLabelValues(validator).Set(float64(r))
+				logDebug("Vote round set: validator=%s round=%d", validator, r)
 			}
+
 		case "Block":
 			logDebug("Found Block")
 			blockContainer, ok := value.(map[string]interface{})
@@ -197,6 +202,7 @@ func HandleConsensusLine(line string) {
 			currentRoundMu.Lock()
 			CurrentRound.Set(float64(r))
 			currentRoundMu.Unlock()
+			logDebug("Current round set: %d", r)
 		default:
 			logDebug("Unknown key in consensus content: %s", key)
 		}
