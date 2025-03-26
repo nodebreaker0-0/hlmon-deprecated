@@ -171,9 +171,15 @@ func HandleConsensusLine(line string) {
 			}
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
-			hbRaw, ok := value.(map[string]interface{})
+			hbWrapper, ok := value.(map[string]interface{})
 			if !ok {
-				logWarn("Invalid HeartbeatAck format: %v", value)
+				logWarn("Invalid HeartbeatAck format (not a map): %v", value)
+				continue
+			}
+
+			hbRaw, ok := hbWrapper["heartbeat_ack"].(map[string]interface{})
+			if !ok {
+				logWarn("Missing heartbeat_ack field or invalid format: %v", hbWrapper)
 				continue
 			}
 
