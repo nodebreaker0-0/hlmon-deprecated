@@ -2,7 +2,10 @@ module validator-exporter
 
 go 1.23.1
 
-require github.com/prometheus/client_golang v1.15.1
+require (
+	github.com/hashicorp/golang-lru v1.0.2
+	github.com/prometheus/client_golang v1.15.1
+)
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
