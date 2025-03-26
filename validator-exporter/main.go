@@ -25,6 +25,7 @@ var (
 	consensusPath    = flag.String("consensus-path", "", "Base path for consensus log files (required)")
 	statusPath       = flag.String("status-path", "", "Base path for status log files (required)")
 	validatorAddress = flag.String("validator-address", "", "Your validator address (required)")
+	logLevel         = flag.String("log-level", "info", "Log level: debug, info, warn")
 
 	LastVoteRound = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -63,11 +64,20 @@ var delayedSince sync.Map
 var currentRoundMu sync.Mutex
 var shortAddress string
 
-func init() {
-	prometheus.MustRegister(LastVoteRound)
-	prometheus.MustRegister(CurrentRound)
-	prometheus.MustRegister(DisconnectedValidator)
-	prometheus.MustRegister(AckDelaySeconds)
+func logDebug(format string, args ...interface{}) {
+	if *logLevel == "debug" {
+		log.Printf("[DEBUG] "+format, args...)
+	}
+}
+
+func logInfo(format string, args ...interface{}) {
+	if *logLevel == "debug" || *logLevel == "info" {
+		log.Printf("[INFO] "+format, args...)
+	}
+}
+
+func logWarn(format string, args ...interface{}) {
+	log.Printf("[WARN] "+format, args...)
 }
 
 func shortenAddress(addr string) string {
@@ -82,7 +92,7 @@ func getLatestHourlyFile(basePath string) string {
 	fullDir := filepath.Join(basePath, today)
 	entries, err := os.ReadDir(fullDir)
 	if err != nil {
-		log.Printf("Failed to read dir: %v", err)
+		logWarn("Failed to read dir: %v", err)
 		return ""
 	}
 	var nums []int
@@ -101,18 +111,17 @@ func getLatestHourlyFile(basePath string) string {
 func TailLogFile(path string, callback func(string)) {
 	file, err := os.Open(path)
 	if err != nil {
-		log.Printf("Tail open error: %v", err)
+		logWarn("Tail open error: %v", err)
 		return
 	}
 	defer file.Close()
-
-	reader := bufio.NewReader(file)
 	file.Seek(0, io.SeekEnd)
-	log.Printf("Tailing file: %s", path)
+	reader := bufio.NewReader(file)
+	logInfo("Tailing file: %s", path)
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			time.Sleep(100 * time.Millisecond) // wait for more data
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		callback(line)
@@ -120,33 +129,39 @@ func TailLogFile(path string, callback func(string)) {
 }
 
 func HandleConsensusLine(line string) {
-	log.Printf("[DEBUG] Raw line: %s", line)
+	logDebug("Raw line: %s", line)
 
 	var entry []interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &entry); err != nil || len(entry) < 2 {
-		log.Printf("[WARN] Invalid consensus line: %v | Error: %v", line, err)
+		logWarn("Invalid consensus line: %v | Error: %v", line, err)
 		return
 	}
 
 	inner, ok := entry[1].([]interface{})
 	if !ok || len(inner) != 2 {
-		log.Printf("[WARN] Unexpected consensus format: %v", entry)
+		logWarn("Unexpected consensus format: %v", entry)
 		return
 	}
 	direction, _ := inner[0].(string)
 	content, ok := inner[1].(map[string]interface{})
 	if !ok {
-		log.Printf("[WARN] Invalid consensus content structure: %v", inner[1])
+		logWarn("Invalid consensus content structure: %v", inner[1])
 		return
 	}
 
+	if rawMsg, exists := content["msg"]; exists {
+		if nestedMsg, ok := rawMsg.(map[string]interface{}); ok {
+			content = nestedMsg
+		}
+	}
+
 	now := float64(time.Now().Unix())
-	log.Printf("[DEBUG] Direction: %s | Keys: %v", direction, reflect.ValueOf(content).MapKeys())
+	logDebug("Direction: %s | Keys: %v", direction, reflect.ValueOf(content).MapKeys())
 
 	for key, value := range content {
 		switch key {
 		case "Heartbeat":
-			log.Printf("[DEBUG] Found Heartbeat, direction=%s", direction)
+			logDebug("Found Heartbeat, direction=%s", direction)
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
 				if ok && hb["validator"].(string) == shortAddress {
@@ -155,10 +170,10 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "HeartbeatAck":
-			log.Printf("[DEBUG] Found HeartbeatAck, direction=%s", direction)
+			logDebug("Found HeartbeatAck, direction=%s", direction)
 			hb, ok := value.(map[string]interface{})["heartbeat_ack"].(map[string]interface{})
 			if !ok {
-				log.Printf("[WARN] Invalid HeartbeatAck format: %v", value)
+				logWarn("Invalid HeartbeatAck format: %v", value)
 				continue
 			}
 			validator := hb["validator"].(string)
@@ -178,11 +193,11 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "Vote":
-			log.Printf("[DEBUG] Found Vote, direction=%s", direction)
+			logDebug("Found Vote, direction=%s", direction)
 			if direction == "out" {
 				vote, ok := value.(map[string]interface{})["vote"].(map[string]interface{})
 				if !ok {
-					log.Printf("[WARN] Invalid vote format: %v", value)
+					logWarn("Invalid vote format: %v", value)
 					continue
 				}
 				validator := vote["validator"].(string)
@@ -192,7 +207,7 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "Block":
-			log.Printf("[DEBUG] Found Block")
+			logDebug("Found Block")
 			msg, ok := value.(map[string]interface{})["Block"].(map[string]interface{})
 			if ok {
 				if r, ok := msg["round"].(float64); ok {
@@ -202,7 +217,7 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		default:
-			log.Printf("[DEBUG] Unknown key in consensus content: %s", key)
+			logDebug("Unknown key in consensus content: %s", key)
 		}
 	}
 }
@@ -210,7 +225,7 @@ func HandleConsensusLine(line string) {
 func ScanStatusFile(path string) {
 	file, err := os.Open(path)
 	if err != nil {
-		log.Printf("Status file open error: %v", err)
+		logWarn("Status file open error: %v", err)
 		return
 	}
 	defer file.Close()
@@ -252,7 +267,6 @@ func HandleStatusLine(line string) {
 
 func main() {
 	flag.Parse()
-	log.Println("🚀 Starting Validator Exporter on :9101")
 
 	if *validatorAddress == "" {
 		log.Fatal("--validator-address is required")
@@ -265,6 +279,12 @@ func main() {
 	}
 
 	shortAddress = shortenAddress(*validatorAddress)
+	logInfo("Using shortened validator address: %s", shortAddress)
+
+	prometheus.MustRegister(LastVoteRound)
+	prometheus.MustRegister(CurrentRound)
+	prometheus.MustRegister(DisconnectedValidator)
+	prometheus.MustRegister(AckDelaySeconds)
 
 	go func() {
 		for {
@@ -287,5 +307,6 @@ func main() {
 	}()
 
 	http.Handle("/metrics", promhttp.Handler())
+	logInfo("🚀 Starting Validator Exporter on :9101")
 	http.ListenAndServe(":9101", nil)
 }
