@@ -144,16 +144,16 @@ func parseLogLine(line, shortAddr string) {
 	msgStr := string(data)
 
 	if strings.Contains(msgStr, "\"Heartbeat\":{\"validator\":") {
-		log.Println("[parse] Detected Heartbeat message")
+		//log.Println("[parse] Detected Heartbeat message")
 		handleHeartbeatSentFromLine(msgStr, ts, shortAddr)
 	} else if strings.Contains(msgStr, "\"HeartbeatAck\"") {
-		log.Println("[parse] Detected HeartbeatAck message")
+		//log.Println("[parse] Detected HeartbeatAck message")
 		handleHeartbeatAckFromLine(msgStr, ts, shortAddr)
 	} else if strings.Contains(msgStr, "\"Vote\":") {
-		log.Println("[parse] Detected Vote message")
+		//log.Println("[parse] Detected Vote message")
 		handleVoteFromLine(msgStr, shortAddr)
 	} else if strings.Contains(msgStr, "\"Block\":") {
-		log.Println("[parse] Detected Block message")
+		//log.Println("[parse] Detected Block message")
 		handleCurrentRoundFromLine(msgStr)
 	}
 }

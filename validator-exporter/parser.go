@@ -31,6 +31,7 @@ func handleHeartbeatSentFromLine(data string, ts time.Time, shortAddr string) {
 	if !strings.Contains(data, "\"validator\":\""+shortAddr) {
 		return
 	}
+	log.Println("handleHeartbeatSentFromLine: ", data)
 
 	var wrapper map[string]map[string]Heartbeat
 	if err := json.Unmarshal([]byte(data), &wrapper); err != nil {
@@ -49,6 +50,7 @@ func handleHeartbeatAckFromLine(data string, ts time.Time, _ string) {
 	if err := json.Unmarshal([]byte(data), &wrapper); err != nil {
 		return
 	}
+	log.Println("handleHeartbeatAckFromLine: ", data)
 	for _, inner := range wrapper {
 		hba := inner["HeartbeatAck"]
 		if sentTimeRaw, ok := heartbeatSent.Load(hba.RandomID); ok {
@@ -69,7 +71,7 @@ func handleVoteFromLine(data string, shortAddr string) {
 	if !strings.Contains(data, "\"validator\":\""+shortAddr) {
 		return
 	}
-
+	log.Println("handleVoteFromLine: ", data)
 	var raw map[string]map[string]map[string]interface{}
 	if err := json.Unmarshal([]byte(data), &raw); err != nil {
 		return
@@ -97,6 +99,7 @@ func handleCurrentRoundFromLine(data string) {
 	if err := json.Unmarshal([]byte(data), &raw); err != nil {
 		return
 	}
+	log.Println("handleCurrentRoundFromLine: ", data)
 
 	for _, msg := range raw {
 		block, ok := msg["msg"].(map[string]interface{})
