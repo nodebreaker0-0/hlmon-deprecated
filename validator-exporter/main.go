@@ -38,21 +38,14 @@ var (
 
 // global round values protected by mutex
 var (
-	roundsMu         sync.Mutex
-	lastVoteRoundVal int64 = 0
-	currentRoundVal  int64 = 0
+	roundsMu sync.Mutex
 )
 
 // heartbeat tracking (for outgoing heartbeat messages)
+// key: random_id (문자열), value: send timestamp
 var (
 	heartbeatMap      = make(map[string]time.Time)
 	heartbeatMapMutex sync.Mutex
-)
-
-// lastGoodHeartbeatTime is updated when a heartbeat ack is received within 200ms.
-var (
-	lastGoodHeartbeatTime  time.Time
-	lastGoodHeartbeatMutex sync.Mutex
 )
 
 func main() {
@@ -76,11 +69,6 @@ func main() {
 		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(":2112", nil))
 	}()
-
-	// 초기 "좋은" heartbeat ack 타임은 현재로 설정
-	lastGoodHeartbeatMutex.Lock()
-	lastGoodHeartbeatTime = time.Now()
-	lastGoodHeartbeatMutex.Unlock()
 
 	// 최신 로그 파일 경로 계산 (예: consensusPath/YYYYMMDD/시간)
 	now := time.Now()
@@ -145,7 +133,7 @@ func tailFile(filePath string, lineCh chan<- string) {
 func processLogLine(line string, shortValidator string) {
 	// 로그 라인은 JSON 배열로 되어 있음:
 	// [
-	//   "2025-03-26T08:29:04.657435334",
+	//   "2025-03-26T11:13:15.591117076",
 	//   ["in" 또는 "out", { ... }]
 	// ]
 	var logEntry []interface{}
@@ -156,6 +144,8 @@ func processLogLine(line string, shortValidator string) {
 	if len(logEntry) < 2 {
 		return
 	}
+
+	// timestamp 파싱 (타임존 정보 없이 "2006-01-02T15:04:05.999999999" 포맷 사용)
 	timestampStr, ok := logEntry[0].(string)
 	if !ok {
 		return
@@ -190,9 +180,6 @@ func processLogLine(line string, shortValidator string) {
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
 						lastVoteRound.Set(roundVal)
-						roundsMu.Lock()
-						lastVoteRoundVal = int64(roundVal)
-						roundsMu.Unlock()
 					}
 				}
 			}
@@ -205,9 +192,6 @@ func processLogLine(line string, shortValidator string) {
 		if ok {
 			if roundVal, ok := blockMap["round"].(float64); ok {
 				currentRound.Set(roundVal)
-				roundsMu.Lock()
-				currentRoundVal = int64(roundVal)
-				roundsMu.Unlock()
 			}
 		}
 	}
@@ -218,10 +202,10 @@ func processLogLine(line string, shortValidator string) {
 		if ok {
 			validator, ok := hbMap["validator"].(string)
 			if ok && validator == shortValidator {
+				// round 정보는 사용하지 않고, random_id만 키로 사용
 				randID, ok1 := hbMap["random_id"].(float64)
-				roundVal, ok2 := hbMap["round"].(float64)
-				if ok1 && ok2 {
-					key := fmt.Sprintf("%d-%d", int64(randID), int64(roundVal))
+				if ok1 {
+					key := fmt.Sprintf("%d", int64(randID))
 					heartbeatMapMutex.Lock()
 					heartbeatMap[key] = timestamp
 					heartbeatMapMutex.Unlock()
@@ -231,33 +215,40 @@ func processLogLine(line string, shortValidator string) {
 	}
 
 	// --- HeartbeatAck 메시지 처리 ---
-	// 여러 벨리데이터가 ack를 보내므로, 메트릭은 ack를 보낸 validator별로 딜레이를 기록한다.
-	if ackVal, exists := msgObj["HeartbeatAck"]; exists && direction == "in" {
-		ackMap, ok := ackVal.(map[string]interface{})
-		if ok {
-			randID, ok1 := ackMap["random_id"].(float64)
-			roundVal, ok2 := ackMap["round"].(float64)
-			if ok1 && ok2 {
-				key := fmt.Sprintf("%d-%d", int64(randID), int64(roundVal))
-				heartbeatMapMutex.Lock()
-				sendTime, exists := heartbeatMap[key]
-				if exists {
-					delay := timestamp.Sub(sendTime)
-					// ack를 보낸 벨리데이터는 로그의 "source" 필드에서 확인
-					src, okSrc := msgObj["source"].(string)
-					if okSrc {
-						heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
-					}
-					delete(heartbeatMap, key)
-					// 200ms 이하인 경우 "좋은" heartbeat ack로 갱신
-					if delay <= 200*time.Millisecond {
-						lastGoodHeartbeatMutex.Lock()
-						lastGoodHeartbeatTime = timestamp
-						lastGoodHeartbeatMutex.Unlock()
-					}
-				}
-				heartbeatMapMutex.Unlock()
+	// HeartbeatAck 메시지는 두 가지 형태로 올 수 있음:
+	// 1. msgObj["HeartbeatAck"]
+	// 2. msgObj["msg"] 안에 {"HeartbeatAck":{...}}
+	var ackContent interface{}
+	if val, exists := msgObj["HeartbeatAck"]; exists {
+		ackContent = val
+	} else if msgInner, exists := msgObj["msg"]; exists {
+		if innerMap, ok := msgInner.(map[string]interface{}); ok {
+			if val, exists := innerMap["HeartbeatAck"]; exists {
+				ackContent = val
 			}
+		}
+	}
+	if ackContent != nil && direction == "in" {
+		ackMap, ok := ackContent.(map[string]interface{})
+		if !ok {
+			return
+		}
+		// random_id만 매칭 (round는 무시)
+		randID, ok1 := ackMap["random_id"].(float64)
+		if ok1 {
+			key := fmt.Sprintf("%d", int64(randID))
+			heartbeatMapMutex.Lock()
+			sendTime, exists := heartbeatMap[key]
+			if exists {
+				delay := timestamp.Sub(sendTime)
+				// ack를 보낸 벨리데이터는 로그의 "source" 필드에서 확인
+				src, okSrc := msgObj["source"].(string)
+				if okSrc {
+					heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
+				}
+				delete(heartbeatMap, key)
+			}
+			heartbeatMapMutex.Unlock()
 		}
 	}
 }
