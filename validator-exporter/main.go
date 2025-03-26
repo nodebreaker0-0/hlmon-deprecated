@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,27 +120,33 @@ func TailLogFile(path string, callback func(string)) {
 }
 
 func HandleConsensusLine(line string) {
+	log.Printf("[DEBUG] Raw line: %s", line)
+
 	var entry []interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &entry); err != nil || len(entry) < 2 {
-		log.Printf("Invalid consensus line: %v", err)
+		log.Printf("[WARN] Invalid consensus line: %v | Error: %v", line, err)
 		return
 	}
+
 	inner, ok := entry[1].([]interface{})
 	if !ok || len(inner) != 2 {
-		log.Printf("Unexpected consensus format: %v", entry)
+		log.Printf("[WARN] Unexpected consensus format: %v", entry)
 		return
 	}
 	direction, _ := inner[0].(string)
 	content, ok := inner[1].(map[string]interface{})
 	if !ok {
-		log.Printf("Invalid consensus content: %v", inner[1])
+		log.Printf("[WARN] Invalid consensus content structure: %v", inner[1])
 		return
 	}
+
 	now := float64(time.Now().Unix())
+	log.Printf("[DEBUG] Direction: %s | Keys: %v", direction, reflect.ValueOf(content).MapKeys())
 
 	for key, value := range content {
 		switch key {
 		case "Heartbeat":
+			log.Printf("[DEBUG] Found Heartbeat, direction=%s", direction)
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
 				if ok && hb["validator"].(string) == shortAddress {
@@ -148,9 +155,10 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "HeartbeatAck":
+			log.Printf("[DEBUG] Found HeartbeatAck, direction=%s", direction)
 			hb, ok := value.(map[string]interface{})["heartbeat_ack"].(map[string]interface{})
 			if !ok {
-				log.Printf("Invalid HeartbeatAck format: %v", value)
+				log.Printf("[WARN] Invalid HeartbeatAck format: %v", value)
 				continue
 			}
 			validator := hb["validator"].(string)
@@ -170,10 +178,11 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "Vote":
+			log.Printf("[DEBUG] Found Vote, direction=%s", direction)
 			if direction == "out" {
 				vote, ok := value.(map[string]interface{})["vote"].(map[string]interface{})
 				if !ok {
-					log.Printf("Invalid vote format: %v", value)
+					log.Printf("[WARN] Invalid vote format: %v", value)
 					continue
 				}
 				validator := vote["validator"].(string)
@@ -183,6 +192,7 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "Block":
+			log.Printf("[DEBUG] Found Block")
 			msg, ok := value.(map[string]interface{})["Block"].(map[string]interface{})
 			if ok {
 				if r, ok := msg["round"].(float64); ok {
@@ -191,6 +201,8 @@ func HandleConsensusLine(line string) {
 					currentRoundMu.Unlock()
 				}
 			}
+		default:
+			log.Printf("[DEBUG] Unknown key in consensus content: %s", key)
 		}
 	}
 }
