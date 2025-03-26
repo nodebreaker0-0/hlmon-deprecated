@@ -136,9 +136,13 @@ func HandleConsensusLine(line string) {
 			logDebug("Found Heartbeat, direction=%s", direction)
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
-				if ok && hb["validator"].(string) == shortAddress {
-					rid := hb["random_id"].(json.Number).String()
-					heartbeatSent.Store(rid, now)
+				if ok {
+					val := hb["validator"].(string)
+					if strings.Contains(*validatorAddress, val[len(val)-4:]) {
+						rid := hb["random_id"].(json.Number).String()
+						heartbeatSent.Store(rid, now)
+						logDebug("Stored heartbeat random_id=%s", rid)
+					}
 				}
 			}
 
