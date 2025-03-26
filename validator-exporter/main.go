@@ -1,7 +1,8 @@
-// validator_exporter_refactored.go
+// validator_exporter.go
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// --- Prometheus metrics ---
+// Prometheus metrics
 var (
 	validatorAddr    = flag.String("validator-address", "", "Validator address")
 	consensusLogPath = flag.String("consensus-path", "", "Path to consensus logs")
@@ -37,18 +38,20 @@ var (
 		prometheus.GaugeOpts{Name: "validator_heartbeat_ack_delay_seconds", Help: "Heartbeat ack delay (sec)"},
 		[]string{"validator"},
 	)
+	DisconnectedValidator = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "validator_disconnected", Help: "Validator disconnection state"},
+		[]string{"source", "target", "last_round"},
+	)
 )
 
-// --- Internal state ---
+// Internal state
 var (
-	heartbeatSent sync.Map
-	voteMu        sync.RWMutex
-	roundMu       sync.RWMutex
-
+	heartbeatSent    sync.Map
+	voteMu           sync.RWMutex
+	roundMu          sync.RWMutex
 	lastVoteRound    float64
 	lastCurrentRound float64
-
-	shortAddr string
+	shortAddr        string
 )
 
 func main() {
@@ -60,11 +63,11 @@ func main() {
 	shortAddr = shortenAddress(*validatorAddr)
 	log.Printf("[INFO] validator: %s", shortAddr)
 
-	prometheus.MustRegister(LastVoteRound)
-	prometheus.MustRegister(CurrentRound)
-	prometheus.MustRegister(AckDelaySeconds)
+	prometheus.MustRegister(LastVoteRound, CurrentRound, AckDelaySeconds, DisconnectedValidator)
 
 	go startTailLoop(*consensusLogPath)
+	go startStatusScanner(*statusLogPath)
+
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":9101", nil))
 }
@@ -234,4 +237,57 @@ func handleBlock(val interface{}) {
 		lastCurrentRound = float64(round)
 	}
 	roundMu.Unlock()
+}
+
+func startStatusScanner(base string) {
+	for {
+		path := getLatestFile(base)
+		if path != "" {
+			scanStatus(path)
+		}
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func scanStatus(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("[WARN] status open error: %v", err)
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var lastLine string
+	for scanner.Scan() {
+		lastLine = scanner.Text()
+	}
+	if lastLine != "" {
+		handleStatusLine(lastLine)
+	}
+}
+
+func handleStatusLine(line string) {
+	var entry []interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &entry); err != nil || len(entry) < 2 {
+		return
+	}
+	payload, ok := entry[1].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if raw, ok := payload["disconnected_validators"]; ok {
+		dis := raw.([]interface{})
+		for _, item := range dis {
+			pair := item.([]interface{})
+			target := pair[0].(string)
+			sources := pair[1].([]interface{})
+			for _, s := range sources {
+				srcPair := s.([]interface{})
+				source := srcPair[0].(string)
+				lastRound := int(srcPair[1].(float64))
+				DisconnectedValidator.WithLabelValues(source, target, fmt.Sprintf("%d", lastRound)).Set(1)
+			}
+		}
+	}
 }
