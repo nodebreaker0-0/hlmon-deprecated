@@ -196,14 +196,46 @@ func HandleConsensusLine(line string) {
 				}
 			}
 		case "Block":
-			block := value.(map[string]interface{})["Block"].(map[string]interface{})
-			if round, ok := block["round"].(json.Number); ok {
-				if r, err := round.Int64(); err == nil {
-					currentRoundMu.Lock()
-					CurrentRound.Set(float64(r))
-					currentRoundMu.Unlock()
-				}
+			logDebug("Found Block")
+			blockContainer, ok := value.(map[string]interface{})
+			if !ok || blockContainer == nil {
+				logWarn("Block container invalid: %v", value)
+				break
 			}
+
+			blockDataRaw, exists := blockContainer["Block"]
+			if !exists {
+				logWarn("Missing 'Block' key in blockContainer: %v", blockContainer)
+				break
+			}
+
+			blockDataMap, ok := blockDataRaw.(map[string]interface{})
+			if !ok || blockDataMap == nil {
+				logWarn("Block field is not a valid map[string]interface{}: %v", blockDataRaw)
+				break
+			}
+
+			roundRaw, exists := blockDataMap["round"]
+			if !exists {
+				logWarn("Missing 'round' in block data: %v", blockDataMap)
+				break
+			}
+
+			roundNum, ok := roundRaw.(json.Number)
+			if !ok {
+				logWarn("Round is not json.Number: %v", roundRaw)
+				break
+			}
+
+			r, err := roundNum.Int64()
+			if err != nil {
+				logWarn("Failed to parse round: %v", err)
+				break
+			}
+
+			currentRoundMu.Lock()
+			CurrentRound.Set(float64(r))
+			currentRoundMu.Unlock()
 		}
 	}
 }
