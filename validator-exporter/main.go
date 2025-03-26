@@ -160,7 +160,7 @@ func processLogLine(line string, shortValidator string) {
 	if !ok {
 		return
 	}
-	timestamp, err := time.Parse(time.RFC3339Nano, timestampStr)
+	timestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestampStr)
 	if err != nil {
 		log.Printf("Error parsing timestamp: %v", err)
 		return
