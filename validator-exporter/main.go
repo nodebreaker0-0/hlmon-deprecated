@@ -121,11 +121,8 @@ func loadAndDeleteHeartbeat(rid string) (float64, bool) {
 
 func HandleConsensusLine(line string) {
 	logDebug("Raw line: %s", line)
-	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(line)))
-	decoder.UseNumber()
-
 	var entry []interface{}
-	if err := decoder.Decode(&entry); err != nil || len(entry) < 2 {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &entry); err != nil || len(entry) < 2 {
 		logWarn("Invalid consensus line: %v | Error: %v", line, err)
 		return
 	}
@@ -140,13 +137,14 @@ func HandleConsensusLine(line string) {
 		logWarn("Invalid consensus content structure: %v", inner[1])
 		return
 	}
+	// drill into `msg` if present
 	if rawMsg, exists := content["msg"]; exists {
 		if nestedMsg, ok := rawMsg.(map[string]interface{}); ok {
 			content = nestedMsg
 		}
 	}
 
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := float64(time.Now().Unix())
 	logDebug("Direction: %s | Keys: %v", direction, reflect.ValueOf(content).MapKeys())
 
 	for key, value := range content {
@@ -154,51 +152,49 @@ func HandleConsensusLine(line string) {
 		case "Heartbeat":
 			logDebug("Found Heartbeat, direction=%s", direction)
 			if direction == "out" {
-				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
-				if ok {
-					val := hb["validator"].(string)
-					if strings.HasSuffix(val, shortAddress[len(shortAddress)-4:]) {
-						rid := hb["random_id"].(json.Number).String()
-						storeHeartbeat(rid, now)
-						logDebug("Stored heartbeat random_id=%s", rid)
-					}
+				hb := value.(map[string]interface{})
+				val := hb["validator"].(string)
+				if val == *validatorAddress || shortenAddress(val) == shortAddress {
+					rid := fmt.Sprint(hb["random_id"])
+					heartbeatSent.Store(rid, now)
+					logDebug("Stored heartbeat random_id=%s", rid)
+				} else {
+					logDebug("Heartbeat skipped (validator mismatch): val=%s", val)
 				}
 			}
-
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
 			if direction == "in" {
 				ack := value.(map[string]interface{})
-				rid := ack["random_id"].(json.Number).String()
+				rid := fmt.Sprint(ack["random_id"])
 				validator := ack["validator"].(string)
-				if sent, ok := loadAndDeleteHeartbeat(rid); ok {
-					delay := now - sent
-					AckDelaySeconds.WithLabelValues(validator).Set(delay)
+				if sent, ok := heartbeatSent.Load(rid); ok {
+					delay := now - sent.(float64)
 					logDebug("HeartbeatAck match: validator=%s rid=%s delay=%.3fs", validator, rid, delay)
+					AckDelaySeconds.WithLabelValues(validator).Set(delay)
 				} else {
 					logDebug("No matching heartbeatSent found for rid=%s", rid)
 				}
 			}
-
 		case "Vote":
 			logDebug("Found Vote, direction=%s", direction)
 			if direction == "out" {
-				vote, ok := value.(map[string]interface{})["vote"].(map[string]interface{})
-				if ok {
-					validator := vote["validator"].(string)
-					if strings.HasSuffix(validator, shortAddress[len(shortAddress)-4:]) {
-						round := vote["round"].(json.Number)
-						r, _ := round.Int64()
-						LastVoteRound.WithLabelValues(validator).Set(float64(r))
-					}
+				vote := value.(map[string]interface{})["vote"].(map[string]interface{})
+				validator := vote["validator"].(string)
+				if validator == *validatorAddress || shortenAddress(validator) == shortAddress {
+					round := vote["round"].(json.Number)
+					r, _ := round.Int64()
+					LastVoteRound.WithLabelValues(validator).Set(float64(r))
 				}
 			}
-
 		case "Block":
 			logDebug("Found Block")
-			blockContainer := value.(map[string]interface{})
-			blockData := blockContainer["Block"].(map[string]interface{})
-			handleBlockRound(blockData["round"])
+			blockData := value.(map[string]interface{})["Block"].(map[string]interface{})
+			round := blockData["round"].(json.Number)
+			r, _ := round.Int64()
+			currentRoundMu.Lock()
+			CurrentRound.Set(float64(r))
+			currentRoundMu.Unlock()
 		default:
 			logDebug("Unknown key in consensus content: %s", key)
 		}
