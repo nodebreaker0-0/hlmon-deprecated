@@ -200,6 +200,10 @@ func HandleConsensusLine(line string) {
 		case "Vote":
 			if direction == "out" {
 				vc, ok := value.(map[string]interface{})
+				if !ok {
+					logWarn("Heartbeat container type assertion failed: %v", value)
+					return
+				}
 				if vote, ok := vc["vote"].(map[string]interface{}); ok {
 					validator, _ := vote["validator"].(string)
 					if validator == shortAddress {
