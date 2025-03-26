@@ -217,7 +217,7 @@ func processLogLine(line string, shortValidator string) {
 				validator, ok := voteData["validator"].(string)
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
-						lastVoteRound.Set(roundVal)
+						lastVoteRound.Set(float64(int64(roundVal)))
 						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
 					}
 				}
@@ -230,7 +230,7 @@ func processLogLine(line string, shortValidator string) {
 		blockMap, ok := blockVal.(map[string]interface{})
 		if ok {
 			if roundVal, ok := blockMap["round"].(float64); ok {
-				currentRound.Set(roundVal)
+				currentRound.Set(float64(int64(roundVal)))
 				currentRoundUpdateTs.Set(float64(time.Now().Unix()))
 			}
 		}
