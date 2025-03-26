@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	validatorAddress string
-	consensusPath    string
+	validatorAddress  string
+	consensusPath     string
+	validatorFullAddr string
 )
 
 func main() {
@@ -24,12 +25,14 @@ func main() {
 
 	// 축약형 주소 (0xef22..d5ac) 만들기
 	shortAddr := shrinkAddress(validatorAddress)
+	validatorFullAddr = validatorAddress
+
 	log.Printf("Monitoring validator: %s (%s)", validatorAddress, shortAddr)
 
 	// Prometheus 메트릭 등록
 	registerMetrics()
 
-	// 로그 워처 시작
+	// 로그 워처 시작 (병렬 처리 + 레이스컨디션 안전 고려됨)
 	go startLogWatcher(shortAddr, consensusPath)
 
 	// 메트릭 서버 시작

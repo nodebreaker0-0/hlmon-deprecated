@@ -28,7 +28,7 @@ type HeartbeatAck struct {
 }
 
 func handleHeartbeatSentFromLine(data string, ts time.Time, shortAddr string) {
-	if !strings.Contains(data, shortAddr) {
+	if !strings.Contains(data, "\"validator\":\""+shortAddr) {
 		return
 	}
 
@@ -44,7 +44,7 @@ func handleHeartbeatSentFromLine(data string, ts time.Time, shortAddr string) {
 	}
 }
 
-func handleHeartbeatAckFromLine(data string, ts time.Time, shortAddr string) {
+func handleHeartbeatAckFromLine(data string, ts time.Time, _ string) {
 	var wrapper map[string]map[string]HeartbeatAck
 	if err := json.Unmarshal([]byte(data), &wrapper); err != nil {
 		return
@@ -54,17 +54,19 @@ func handleHeartbeatAckFromLine(data string, ts time.Time, shortAddr string) {
 		if sentTimeRaw, ok := heartbeatSent.Load(hba.RandomID); ok {
 			sentTime := sentTimeRaw.(time.Time)
 			delay := ts.Sub(sentTime).Milliseconds()
-			peer := hba.Validator
+			peer := shrinkAddress(hba.Validator)
 			heartbeatAckDelayByPeer.WithLabelValues(peer).Set(float64(delay))
 			heartbeatSent.Delete(hba.RandomID)
 			log.Printf("[ack] Ack delay from %s: %dms (random_id=%d)", peer, delay, hba.RandomID)
+		} else {
+			log.Printf("[ack] Ack received for unknown random_id=%d — maybe missed heartbeat?", hba.RandomID)
 		}
 		break
 	}
 }
 
 func handleVoteFromLine(data string, shortAddr string) {
-	if !strings.Contains(data, shortAddr) {
+	if !strings.Contains(data, "\"validator\":\""+shortAddr) {
 		return
 	}
 
