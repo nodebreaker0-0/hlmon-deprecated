@@ -17,6 +17,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// heartbeatInfo stores the send timestamp and acked validators for a heartbeat.
+type heartbeatInfo struct {
+	sendTime time.Time
+	acks     map[string]bool
+}
+
 // Prometheus metrics
 var (
 	lastVoteRound = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -52,10 +58,9 @@ var (
 	)
 )
 
-// heartbeat tracking (for outgoing heartbeat messages)
-// key: random_id (문자열), value: send timestamp
+// heartbeatMap: key는 random_id 문자열, 값은 heartbeatInfo 구조체.
 var (
-	heartbeatMap      = make(map[string]time.Time)
+	heartbeatMap      = make(map[string]*heartbeatInfo)
 	heartbeatMapMutex sync.Mutex
 )
 
@@ -82,6 +87,14 @@ func main() {
 		log.Fatal(http.ListenAndServe(":2112", nil))
 	}()
 
+	// heartbeatMap 정리(cleanup) 루틴: 1초마다 5초 이상 지난 heartbeat 항목 삭제
+	go func() {
+		for {
+			time.Sleep(1 * time.Second)
+			cleanupHeartbeatMap(5 * time.Second)
+		}
+	}()
+
 	// 최신 로그 파일 경로 계산 (예: consensusPath/YYYYMMDD/시간)
 	now := time.Now()
 	dateDir := now.Format("20060102")
@@ -105,6 +118,19 @@ func main() {
 
 	// 메인 루프는 블로킹
 	select {}
+}
+
+// cleanupHeartbeatMap removes heartbeat entries older than the given duration.
+func cleanupHeartbeatMap(threshold time.Duration) {
+	heartbeatMapMutex.Lock()
+	defer heartbeatMapMutex.Unlock()
+	now := time.Now()
+	for key, info := range heartbeatMap {
+		if now.Sub(info.sendTime) > threshold {
+			log.Printf("[Cleanup] Removing heartbeat with random_id=%s, age=%v", key, now.Sub(info.sendTime))
+			delete(heartbeatMap, key)
+		}
+	}
 }
 
 // shortenAddress returns a shortened version (first 6 and last 4 chars) of the validator address.
@@ -192,7 +218,6 @@ func processLogLine(line string, shortValidator string) {
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
 						lastVoteRound.Set(roundVal)
-						// 업데이트 시각을 Unix 타임스탬프로 기록
 						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
 					}
 				}
@@ -206,7 +231,6 @@ func processLogLine(line string, shortValidator string) {
 		if ok {
 			if roundVal, ok := blockMap["round"].(float64); ok {
 				currentRound.Set(roundVal)
-				// 업데이트 시각을 기록
 				currentRoundUpdateTs.Set(float64(time.Now().Unix()))
 			}
 		}
@@ -223,8 +247,15 @@ func processLogLine(line string, shortValidator string) {
 				if ok1 {
 					key := fmt.Sprintf("%d", int64(randID))
 					heartbeatMapMutex.Lock()
-					heartbeatMap[key] = timestamp
+					// 새로운 heartbeatInfo 생성 (ack map은 빈 맵)
+					heartbeatMap[key] = &heartbeatInfo{
+						sendTime: timestamp,
+						acks:     make(map[string]bool),
+					}
 					heartbeatMapMutex.Unlock()
+					log.Printf("[Heartbeat Out] Registered heartbeat: random_id=%s, timestamp=%v", key, timestamp)
+				} else {
+					log.Printf("[Heartbeat Out] Missing random_id field")
 				}
 			}
 		}
@@ -247,6 +278,7 @@ func processLogLine(line string, shortValidator string) {
 	if ackContent != nil && direction == "in" {
 		ackMap, ok := ackContent.(map[string]interface{})
 		if !ok {
+			log.Printf("[HeartbeatAck In] Ack content not a map")
 			return
 		}
 		// random_id만 매칭 (round는 무시)
@@ -254,19 +286,31 @@ func processLogLine(line string, shortValidator string) {
 		if ok1 {
 			key := fmt.Sprintf("%d", int64(randID))
 			heartbeatMapMutex.Lock()
-			sendTime, exists := heartbeatMap[key]
+			hbInfo, exists := heartbeatMap[key]
 			if exists {
-				delay := timestamp.Sub(sendTime)
 				// ack를 보낸 벨리데이터는 로그의 "source" 필드에서 확인
 				src, okSrc := msgObj["source"].(string)
-				if okSrc {
+				if !okSrc {
+					log.Printf("[HeartbeatAck In] Source field missing for ack: random_id=%s", key)
+					heartbeatMapMutex.Unlock()
+					return
+				}
+				// 중복 ack인지 체크 (같은 validator가 이미 응답했는지)
+				if _, alreadyAcked := hbInfo.acks[src]; alreadyAcked {
+					log.Printf("[HeartbeatAck In] Duplicate ack from validator=%s for random_id=%s", src, key)
+				} else {
+					delay := time.Since(hbInfo.sendTime)
 					heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
 					heartbeatAckUpdateTsVec.WithLabelValues(src).Set(float64(time.Now().Unix()))
+					hbInfo.acks[src] = true
+					log.Printf("[HeartbeatAck In] Matched heartbeat: random_id=%s, source=%s, delay=%v", key, src, delay)
 				}
-				// 처리 완료 후 heartbeatMap에서 제거
-				delete(heartbeatMap, key)
+			} else {
+				log.Printf("[HeartbeatAck In] No matching heartbeat found for random_id=%s", key)
 			}
 			heartbeatMapMutex.Unlock()
+		} else {
+			log.Printf("[HeartbeatAck In] Missing random_id field in ack")
 		}
 	}
 }
