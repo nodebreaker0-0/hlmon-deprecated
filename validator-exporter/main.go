@@ -178,8 +178,12 @@ func HandleConsensusLine(line string) {
 			}
 
 			validator, _ := hbRaw["validator"].(string)
-			//round := fmt.Sprintf("%.0f", hbRaw["round"].(float64))
-			rid := fmt.Sprintf("%.0f", hbRaw["random_id"].(float64))
+			rawID, ok := hbRaw["random_id"].(float64)
+			if !ok {
+				logWarn("Missing or invalid random_id in HeartbeatAck: %v", hbRaw)
+				continue
+			}
+			rid := fmt.Sprintf("%.0f", rawID)
 
 			if direction == "in" {
 				if sent, ok := heartbeatSent.Load(rid); ok {
