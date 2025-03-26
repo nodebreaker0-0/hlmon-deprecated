@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -59,12 +60,20 @@ var (
 var heartbeatSent sync.Map
 var delayedSince sync.Map
 var currentRoundMu sync.Mutex
+var shortAddress string
 
 func init() {
 	prometheus.MustRegister(LastVoteRound)
 	prometheus.MustRegister(CurrentRound)
 	prometheus.MustRegister(DisconnectedValidator)
 	prometheus.MustRegister(AckDelaySeconds)
+}
+
+func shortenAddress(addr string) string {
+	if len(addr) < 10 {
+		return addr
+	}
+	return addr[:8] + "..." + addr[len(addr)-4:]
 }
 
 func getLatestHourlyFile(basePath string) string {
@@ -89,25 +98,23 @@ func getLatestHourlyFile(basePath string) string {
 }
 
 func TailLogFile(path string, callback func(string)) {
+	file, err := os.Open(path)
+	if err != nil {
+		log.Printf("Tail open error: %v", err)
+		return
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	file.Seek(0, io.SeekEnd)
+	log.Printf("Tailing file: %s", path)
 	for {
-		file, err := os.Open(path)
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			log.Printf("Tail open error: %v", err)
-			time.Sleep(5 * time.Second)
+			time.Sleep(100 * time.Millisecond) // wait for more data
 			continue
 		}
-		reader := bufio.NewReader(file)
-		file.Seek(0, os.SEEK_END)
-		log.Printf("Tailing file: %s", path)
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				file.Close()
-				break
-			}
-			callback(line)
-		}
-		time.Sleep(2 * time.Second)
+		callback(line)
 	}
 }
 
@@ -135,7 +142,7 @@ func HandleConsensusLine(line string) {
 		case "Heartbeat":
 			if direction == "out" {
 				hb, ok := value.(map[string]interface{})["Heartbeat"].(map[string]interface{})
-				if ok && hb["validator"].(string) == *validatorAddress {
+				if ok && hb["validator"].(string) == shortAddress {
 					rid := fmt.Sprintf("%.0f", hb["random_id"].(float64))
 					heartbeatSent.Store(rid, now)
 				}
@@ -170,7 +177,7 @@ func HandleConsensusLine(line string) {
 					continue
 				}
 				validator := vote["validator"].(string)
-				if validator == *validatorAddress {
+				if validator == shortAddress {
 					round := vote["round"].(float64)
 					LastVoteRound.WithLabelValues(validator).Set(round)
 				}
@@ -244,6 +251,8 @@ func main() {
 	if *statusPath == "" {
 		log.Fatal("--status-path is required")
 	}
+
+	shortAddress = shortenAddress(*validatorAddress)
 
 	go func() {
 		for {
