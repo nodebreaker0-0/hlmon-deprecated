@@ -169,42 +169,25 @@ func HandleConsensusLine(line string) {
 					heartbeatSent.Store(rid, now)
 				}
 			}
+
 		case "HeartbeatAck":
 			logDebug("Found HeartbeatAck, direction=%s", direction)
-			hbWrapper, ok := value.(map[string]interface{})
-			if !ok {
-				logWarn("Invalid HeartbeatAck format (not a map): %v", value)
-				continue
-			}
-
-			hbRaw, ok := hbWrapper["heartbeat_ack"].(map[string]interface{})
-			if !ok {
-				logWarn("Missing heartbeat_ack field or invalid format: %v", hbWrapper)
-				continue
-			}
-
-			validator, _ := hbRaw["validator"].(string)
-			rawID, ok := hbRaw["random_id"].(float64)
-			if !ok {
-				logWarn("Missing or invalid random_id in HeartbeatAck: %v", hbRaw)
-				continue
-			}
-			rid := fmt.Sprintf("%.0f", rawID)
-
 			if direction == "in" {
+				ack, ok := value.(map[string]interface{})
+				if !ok {
+					logWarn("Invalid HeartbeatAck (in): %v", value)
+					continue
+				}
+				rid := fmt.Sprintf("%.0f", ack["random_id"].(float64))
+				validator := ack["validator"].(string)
+
 				if sent, ok := heartbeatSent.Load(rid); ok {
 					delay := now - sent.(float64)
 					AckDelaySeconds.WithLabelValues(validator).Set(delay)
-					if delay > 0.2 {
-						if _, exists := delayedSince.Load(validator); !exists {
-							delayedSince.Store(validator, now)
-						}
-					} else {
-						delayedSince.Delete(validator)
-					}
 					heartbeatSent.Delete(rid)
 				}
 			}
+
 		case "Vote":
 			logDebug("Found Vote, direction=%s", direction)
 			if direction == "out" {
