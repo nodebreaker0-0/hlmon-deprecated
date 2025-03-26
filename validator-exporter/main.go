@@ -1,11 +1,10 @@
+// validator_exporter_refactored.go
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -20,245 +19,219 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// HeartbeatCache with TTL
-
-type CachedHeartbeat struct {
-	Value     float64
-	Timestamp time.Time
-}
-
-type HeartbeatCache struct {
-	sync.Mutex
-	data map[string]CachedHeartbeat
-	ttl  time.Duration
-}
-
-func NewHeartbeatCache(ttl time.Duration) *HeartbeatCache {
-	return &HeartbeatCache{
-		data: make(map[string]CachedHeartbeat),
-		ttl:  ttl,
-	}
-}
-
-func (c *HeartbeatCache) Set(key string, val float64) {
-	c.Lock()
-	defer c.Unlock()
-	c.data[key] = CachedHeartbeat{val, time.Now()}
-}
-
-func (c *HeartbeatCache) Get(key string) (float64, bool) {
-	c.Lock()
-	defer c.Unlock()
-	entry, exists := c.data[key]
-	if !exists || time.Since(entry.Timestamp) > c.ttl {
-		delete(c.data, key)
-		return 0, false
-	}
-	return entry.Value, true
-}
-
+// --- Prometheus metrics ---
 var (
-	consensusPath    = flag.String("consensus-path", "", "Path to consensus logs")
-	statusPath       = flag.String("status-path", "", "Path to status logs")
-	validatorAddress = flag.String("validator-address", "", "Validator address")
+	validatorAddr    = flag.String("validator-address", "", "Validator address")
+	consensusLogPath = flag.String("consensus-path", "", "Path to consensus logs")
+	statusLogPath    = flag.String("status-path", "", "Path to status logs")
 	logLevel         = flag.String("log-level", "info", "Log level")
 
-	LastVoteRound         = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_vote_last_round", Help: "Last round this validator voted in"}, []string{"validator"})
-	CurrentRound          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "current_round", Help: "Most recent consensus round from blocks"})
-	DisconnectedValidator = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_disconnected", Help: "1 if disconnected"}, []string{"source", "target", "last_round"})
-	AckDelaySeconds       = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "validator_heartbeat_ack_delay_seconds", Help: "Heartbeat ack delay (sec)"}, []string{"validator"})
+	LastVoteRound = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "validator_vote_last_round", Help: "Last vote round"},
+		[]string{"validator"},
+	)
+	CurrentRound = prometheus.NewGauge(
+		prometheus.GaugeOpts{Name: "current_round", Help: "Current consensus round"},
+	)
+	AckDelaySeconds = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "validator_heartbeat_ack_delay_seconds", Help: "Heartbeat ack delay (sec)"},
+		[]string{"validator"},
+	)
 )
 
+// --- Internal state ---
 var (
-	heartbeatCache *HeartbeatCache
-	currentRoundMu sync.Mutex
-	shortAddress   string
+	heartbeatSent sync.Map
+	voteMu        sync.RWMutex
+	roundMu       sync.RWMutex
+
+	lastVoteRound    float64
+	lastCurrentRound float64
+
+	shortAddr string
 )
 
-func logDebug(format string, args ...interface{}) {
-	if *logLevel == "debug" {
-		log.Printf("[DEBUG] "+format, args...)
+func main() {
+	flag.Parse()
+	if *validatorAddr == "" || *consensusLogPath == "" || *statusLogPath == "" {
+		log.Fatal("Missing required flags")
 	}
-}
 
-func logInfo(format string, args ...interface{}) {
-	if *logLevel == "debug" || *logLevel == "info" {
-		log.Printf("[INFO] "+format, args...)
-	}
-}
+	shortAddr = shortenAddress(*validatorAddr)
+	log.Printf("[INFO] validator: %s", shortAddr)
 
-func logWarn(format string, args ...interface{}) {
-	log.Printf("[WARN] "+format, args...)
+	prometheus.MustRegister(LastVoteRound)
+	prometheus.MustRegister(CurrentRound)
+	prometheus.MustRegister(AckDelaySeconds)
+
+	go startTailLoop(*consensusLogPath)
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":9101", nil))
 }
 
 func shortenAddress(addr string) string {
-	if len(addr) < 10 {
+	if len(addr) < 12 {
 		return addr
 	}
 	return addr[:8] + "..." + addr[len(addr)-4:]
 }
 
-func getLatestHourlyFile(basePath string) string {
-	today := time.Now().Format("20060102")
-	fullDir := filepath.Join(basePath, today)
-	entries, err := os.ReadDir(fullDir)
-	if err != nil {
-		logWarn("Failed to read dir: %v", err)
-		return ""
-	}
-	var nums []int
-	for _, e := range entries {
-		if i, err := strconv.Atoi(e.Name()); err == nil {
-			nums = append(nums, i)
+func startTailLoop(base string) {
+	for {
+		path := getLatestFile(base)
+		if path != "" {
+			tailLog(path)
 		}
+		time.Sleep(10 * time.Second)
 	}
-	if len(nums) == 0 {
-		return ""
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(nums)))
-	return filepath.Join(fullDir, fmt.Sprintf("%d", nums[0]))
 }
 
-func TailLogFile(path string, callback func(string)) {
-	file, err := os.Open(path)
+func getLatestFile(base string) string {
+	today := time.Now().Format("20060102")
+	dir := filepath.Join(base, today)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		logWarn("Tail open error: %v", err)
+		log.Printf("[WARN] read dir error: %v", err)
+		return ""
+	}
+	var hours []int
+	for _, e := range entries {
+		if n, err := strconv.Atoi(e.Name()); err == nil {
+			hours = append(hours, n)
+		}
+	}
+	if len(hours) == 0 {
+		return ""
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(hours)))
+	return filepath.Join(dir, fmt.Sprintf("%d", hours[0]))
+}
+
+func tailLog(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("[WARN] open error: %v", err)
 		return
 	}
-	defer file.Close()
-	file.Seek(0, io.SeekEnd)
-	reader := bufio.NewReader(file)
-	logInfo("Tailing file: %s", path)
+	defer f.Close()
+	f.Seek(0, 2)
+	buf := make([]byte, 4096)
 	for {
-		line, err := reader.ReadString('\n')
+		n, err := f.Read(buf)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		callback(line)
+		lines := strings.Split(string(buf[:n]), "\n")
+		for _, line := range lines {
+			if line != "" {
+				handleLine(line)
+			}
+		}
 	}
 }
 
-func HandleConsensusLine(line string) {
-	logDebug("Raw line: %s", line)
-	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(line)))
-	decoder.UseNumber()
-
+func handleLine(line string) {
 	var entry []interface{}
-	if err := decoder.Decode(&entry); err != nil || len(entry) < 2 {
-		logWarn("Invalid consensus line: %v | Error: %v", line, err)
+	if err := json.Unmarshal([]byte(line), &entry); err != nil || len(entry) < 2 {
 		return
 	}
 	inner, ok := entry[1].([]interface{})
 	if !ok || len(inner) != 2 {
-		logWarn("Unexpected consensus format: %v", entry)
 		return
 	}
-	direction, _ := inner[0].(string)
-	content, ok := inner[1].(map[string]interface{})
-	if !ok {
-		logWarn("Invalid content structure: %v", inner[1])
+	dir, _ := inner[0].(string)
+	content, _ := inner[1].(map[string]interface{})
+	if content == nil {
 		return
 	}
-	if rawMsg, exists := content["msg"]; exists {
-		if nested, ok := rawMsg.(map[string]interface{}); ok {
-			content = nested
-		}
+	if msg, ok := content["msg"].(map[string]interface{}); ok {
+		content = msg
 	}
-	now := float64(time.Now().Unix())
-	for key, value := range content {
+	for key, val := range content {
 		switch key {
 		case "Heartbeat":
-			if direction == "out" {
-				if hb, ok := value.(map[string]interface{}); ok {
-					val, _ := hb["validator"].(string)
-					ridRaw, ok := hb["random_id"]
-					if strings.HasPrefix(val, shortAddress[:6]) && strings.HasSuffix(val, shortAddress[len(shortAddress)-4:]) && ok {
-						if rid, ok := ridRaw.(json.Number); ok {
-							heartbeatCache.Set(rid.String(), now)
-						}
-					}
-				}
+			if dir == "out" {
+				handleHeartbeat(val)
 			}
 		case "HeartbeatAck":
-			if direction == "in" {
-				if ack, ok := value.(map[string]interface{}); ok {
-					validator, _ := ack["validator"].(string)
-					ridRaw, ok := ack["random_id"]
-					if ok {
-						if rid, ok := ridRaw.(json.Number); ok {
-							if sent, ok := heartbeatCache.Get(rid.String()); ok {
-								delay := now - sent
-								AckDelaySeconds.WithLabelValues(validator).Set(delay)
-							} else {
-								logDebug("Ack received but no matching heartbeat for rid=%s", rid.String())
-							}
-						}
-					}
-				}
+			if dir == "in" {
+				handleAck(val)
 			}
 		case "Vote":
-			if direction == "out" {
-				vc, ok := value.(map[string]interface{})
-				if !ok {
-					logWarn("Heartbeat container type assertion failed: %v", value)
-					return
-				}
-				if vote, ok := vc["vote"].(map[string]interface{}); ok {
-					validator, _ := vote["validator"].(string)
-					if validator == shortAddress {
-						if round, ok := vote["round"].(json.Number); ok {
-							if r, err := round.Int64(); err == nil {
-								LastVoteRound.WithLabelValues(validator).Set(float64(r))
-							}
-						}
-					}
-				}
+			if dir == "out" {
+				handleVote(val)
 			}
 		case "Block":
-			if bc, ok := value.(map[string]interface{}); ok {
-				if bd, ok := bc["Block"].(map[string]interface{}); ok {
-					if round, ok := bd["round"].(json.Number); ok {
-						if r, err := round.Int64(); err == nil {
-							currentRoundMu.Lock()
-							CurrentRound.Set(float64(r))
-							currentRoundMu.Unlock()
-						}
-					}
-				}
+			if dir == "in" {
+				handleBlock(val)
 			}
 		}
 	}
 }
 
-func main() {
-	flag.Parse()
-	if *validatorAddress == "" || *consensusPath == "" || *statusPath == "" {
-		log.Fatal("All --validator-address, --consensus-path, and --status-path are required")
+func handleHeartbeat(val interface{}) {
+	hb, _ := val.(map[string]interface{})
+	valStr, _ := hb["validator"].(string)
+	ridRaw, _ := hb["random_id"]
+	if valStr != shortAddr && !strings.HasPrefix(valStr, shortAddr[:6]) {
+		return
 	}
+	rid, _ := ridRaw.(json.Number)
+	heartbeatSent.Store(rid.String(), time.Now().UnixNano())
+}
 
-	heartbeatCache = NewHeartbeatCache(10 * time.Second)
-	shortAddress = shortenAddress(*validatorAddress)
-	logInfo("Using shortened validator address: %s", shortAddress)
+func handleAck(val interface{}) {
+	ack, _ := val.(map[string]interface{})
+	ridRaw, _ := ack["random_id"].(json.Number)
+	validator, _ := ack["validator"].(string)
+	sentAt, ok := heartbeatSent.LoadAndDelete(ridRaw.String())
+	if ok {
+		delay := float64(time.Now().UnixNano()-sentAt.(int64)) / 1e9
+		AckDelaySeconds.WithLabelValues(validator).Set(delay)
+	}
+}
 
-	prometheus.MustRegister(LastVoteRound)
-	prometheus.MustRegister(CurrentRound)
-	prometheus.MustRegister(DisconnectedValidator)
-	prometheus.MustRegister(AckDelaySeconds)
+func handleVote(val interface{}) {
+	outer, _ := val.(map[string]interface{})
+	vote, _ := outer["vote"].(map[string]interface{})
+	valStr, _ := vote["validator"].(string)
+	if valStr != shortAddr {
+		return
+	}
+	roundRaw, _ := vote["round"].(json.Number)
+	round, _ := roundRaw.Int64()
 
-	go func() {
-		for {
-			path := getLatestHourlyFile(*consensusPath)
-			if path != "" {
-				TailLogFile(path, HandleConsensusLine)
-			} else {
-				logWarn("No consensus file found at %s", *consensusPath)
-			}
-			time.Sleep(10 * time.Second)
-		}
-	}()
+	voteMu.RLock()
+	skip := lastVoteRound == float64(round)
+	voteMu.RUnlock()
+	if skip {
+		return
+	}
+	voteMu.Lock()
+	if lastVoteRound != float64(round) {
+		LastVoteRound.WithLabelValues(valStr).Set(float64(round))
+		lastVoteRound = float64(round)
+	}
+	voteMu.Unlock()
+}
 
-	http.Handle("/metrics", promhttp.Handler())
-	logInfo("🚀 Starting Validator Exporter on :9101")
-	http.ListenAndServe(":9101", nil)
+func handleBlock(val interface{}) {
+	blockOuter, _ := val.(map[string]interface{})
+	block, _ := blockOuter["Block"].(map[string]interface{})
+	roundRaw, _ := block["round"].(json.Number)
+	round, _ := roundRaw.Int64()
+
+	roundMu.RLock()
+	skip := lastCurrentRound == float64(round)
+	roundMu.RUnlock()
+	if skip {
+		return
+	}
+	roundMu.Lock()
+	if lastCurrentRound != float64(round) {
+		CurrentRound.Set(float64(round))
+		lastCurrentRound = float64(round)
+	}
+	roundMu.Unlock()
 }
