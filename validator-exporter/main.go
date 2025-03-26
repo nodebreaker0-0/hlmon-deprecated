@@ -12,10 +12,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/simplelru"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -44,11 +43,9 @@ var (
 )
 
 var (
-	heartbeatCache *lru.LRU
-	voteMu         sync.RWMutex
-	roundMu        sync.RWMutex
-	lastVoteRound  float64
-	lastBlockRound float64
+	heartbeatCache *lru.Cache
+	voteCache      *lru.Cache
+	roundCache     *lru.Cache
 	shortAddr      string
 )
 
@@ -61,16 +58,14 @@ func main() {
 	shortAddr = shortenAddress(*validatorAddr)
 	log.Printf("[INFO] validator: %s", shortAddr)
 
-	cache, _ := lru.NewLRU(5000, nil)
-	heartbeatCache = cache
+	prometheus.MustRegister(LastVoteRound, CurrentRound, AckDelaySeconds, DisconnectedValidator)
 
-	prometheus.MustRegister(LastVoteRound)
-	prometheus.MustRegister(CurrentRound)
-	prometheus.MustRegister(AckDelaySeconds)
-	prometheus.MustRegister(DisconnectedValidator)
+	heartbeatCache, _ = lru.New(5000)
+	voteCache, _ = lru.New(5000)
+	roundCache, _ = lru.New(1000)
 
-	go tailLoop(*consensusLogPath)
-	go statusLoop(*statusLogPath)
+	go startTailLoop(*consensusLogPath)
+	go startStatusScan(*statusLogPath)
 
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":9101", nil))
@@ -83,9 +78,9 @@ func shortenAddress(addr string) string {
 	return addr[:8] + "..." + addr[len(addr)-4:]
 }
 
-func tailLoop(base string) {
+func startTailLoop(base string) {
 	for {
-		path := latestLogFile(base)
+		path := getLatestFile(base)
 		if path != "" {
 			tailLog(path)
 		}
@@ -93,27 +88,28 @@ func tailLoop(base string) {
 	}
 }
 
-func statusLoop(base string) {
+func startStatusScan(base string) {
 	for {
-		path := latestLogFile(base)
+		path := getLatestFile(base)
 		if path != "" {
-			processStatus(path)
+			scanStatus(path)
 		}
 		time.Sleep(30 * time.Second)
 	}
 }
 
-func latestLogFile(base string) string {
+func getLatestFile(base string) string {
 	today := time.Now().Format("20060102")
 	dir := filepath.Join(base, today)
-	dirs, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
+		log.Printf("[WARN] read dir error: %v", err)
 		return ""
 	}
 	var hours []int
-	for _, d := range dirs {
-		if h, err := strconv.Atoi(d.Name()); err == nil {
-			hours = append(hours, h)
+	for _, e := range entries {
+		if n, err := strconv.Atoi(e.Name()); err == nil {
+			hours = append(hours, n)
 		}
 	}
 	if len(hours) == 0 {
@@ -142,6 +138,46 @@ func tailLog(path string) {
 	}
 }
 
+func scanStatus(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	var lastLine string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lastLine = scanner.Text()
+	}
+	if lastLine != "" {
+		handleStatus(lastLine)
+	}
+}
+
+func handleStatus(line string) {
+	var entry []interface{}
+	if err := json.Unmarshal([]byte(line), &entry); err != nil || len(entry) < 2 {
+		return
+	}
+	payload, ok := entry[1].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if raw, ok := payload["disconnected_validators"].([]interface{}); ok {
+		for _, item := range raw {
+			pair := item.([]interface{})
+			target := pair[0].(string)
+			sources := pair[1].([]interface{})
+			for _, s := range sources {
+				srcPair := s.([]interface{})
+				source := srcPair[0].(string)
+				lastRound := int(srcPair[1].(float64))
+				DisconnectedValidator.WithLabelValues(source, target, fmt.Sprintf("%d", lastRound)).Set(1)
+			}
+		}
+	}
+}
+
 func handleLine(line string) {
 	var entry []interface{}
 	if err := json.Unmarshal([]byte(line), &entry); err != nil || len(entry) < 2 {
@@ -163,98 +199,73 @@ func handleLine(line string) {
 		switch key {
 		case "Heartbeat":
 			if dir == "out" {
-				hb := val.(map[string]interface{})
-				addr, _ := hb["validator"].(string)
-				id, _ := hb["random_id"].(json.Number)
-				if strings.HasPrefix(addr, shortAddr[:6]) {
-					heartbeatCache.Add(id.String(), time.Now().UnixNano())
-				}
+				handleHeartbeat(val)
 			}
 		case "HeartbeatAck":
 			if dir == "in" {
-				ack := val.(map[string]interface{})
-				id, _ := ack["random_id"].(json.Number)
-				addr, _ := ack["validator"].(string)
-				if tsRaw, ok := heartbeatCache.Get(id.String()); ok {
-					delay := float64(time.Now().UnixNano()-tsRaw.(int64)) / 1e6
-					AckDelaySeconds.WithLabelValues(addr).Set(delay)
-					heartbeatCache.Remove(id.String())
-				}
+				handleAck(val)
 			}
 		case "Vote":
 			if dir == "out" {
-				voteOuter := val.(map[string]interface{})
-				vote := voteOuter["vote"].(map[string]interface{})
-				addr, _ := vote["validator"].(string)
-				if addr == shortAddr {
-					roundRaw, _ := vote["round"].(json.Number)
-					round, _ := roundRaw.Int64()
-					voteMu.RLock()
-					dup := lastVoteRound == float64(round)
-					voteMu.RUnlock()
-					if !dup {
-						voteMu.Lock()
-						LastVoteRound.WithLabelValues(addr).Set(float64(round))
-						lastVoteRound = float64(round)
-						voteMu.Unlock()
-					}
-				}
+				handleVote(val)
 			}
 		case "Block":
 			if dir == "in" {
-				blockOuter := val.(map[string]interface{})
-				block := blockOuter["Block"].(map[string]interface{})
-				roundRaw, _ := block["round"].(json.Number)
-				round, _ := roundRaw.Int64()
-				roundMu.RLock()
-				dup := lastBlockRound == float64(round)
-				roundMu.RUnlock()
-				if !dup {
-					roundMu.Lock()
-					CurrentRound.Set(float64(round))
-					lastBlockRound = float64(round)
-					roundMu.Unlock()
-				}
+				handleBlock(val)
 			}
 		}
 	}
 }
 
-func processStatus(path string) {
-	f, err := os.Open(path)
-	if err != nil {
+func handleHeartbeat(val interface{}) {
+	hb, _ := val.(map[string]interface{})
+	valStr, _ := hb["validator"].(string)
+	ridRaw, _ := hb["random_id"]
+	if valStr != shortAddr && !strings.HasPrefix(valStr, shortAddr[:6]) {
 		return
 	}
-	defer f.Close()
+	rid, _ := ridRaw.(json.Number)
+	heartbeatCache.Add(rid.String(), time.Now().UnixNano())
+}
 
-	scanner := bufio.NewScanner(f)
-	var lastLine string
-	for scanner.Scan() {
-		lastLine = scanner.Text()
+func handleAck(val interface{}) {
+	ack, _ := val.(map[string]interface{})
+	ridRaw, _ := ack["random_id"].(json.Number)
+	validator, _ := ack["validator"].(string)
+	if sentAtRaw, ok := heartbeatCache.Get(ridRaw.String()); ok {
+		delay := float64(time.Now().UnixNano()-sentAtRaw.(int64)) / 1e6
+		AckDelaySeconds.WithLabelValues(validator).Set(delay)
+		heartbeatCache.Remove(ridRaw.String())
 	}
-	if lastLine == "" {
+}
+
+func handleVote(val interface{}) {
+	outer, _ := val.(map[string]interface{})
+	vote, _ := outer["vote"].(map[string]interface{})
+	valStr, _ := vote["validator"].(string)
+	roundRaw, _ := vote["round"].(json.Number)
+	round, _ := roundRaw.Int64()
+
+	if valStr != shortAddr {
 		return
 	}
-	var entry []interface{}
-	if err := json.Unmarshal([]byte(lastLine), &entry); err != nil || len(entry) < 2 {
+	key := fmt.Sprintf("%s-%d", valStr, round)
+	if _, ok := voteCache.Get(key); ok {
 		return
 	}
-	payload, ok := entry[1].(map[string]interface{})
-	if !ok {
+	voteCache.Add(key, struct{}{})
+	LastVoteRound.WithLabelValues(valStr).Set(float64(round))
+}
+
+func handleBlock(val interface{}) {
+	blockOuter, _ := val.(map[string]interface{})
+	block, _ := blockOuter["Block"].(map[string]interface{})
+	roundRaw, _ := block["round"].(json.Number)
+	round, _ := roundRaw.Int64()
+
+	if _, ok := roundCache.Get(round); ok {
 		return
 	}
-	if raw, ok := payload["disconnected_validators"]; ok {
-		arr := raw.([]interface{})
-		for _, v := range arr {
-			pair := v.([]interface{})
-			target := pair[0].(string)
-			sources := pair[1].([]interface{})
-			for _, s := range sources {
-				slice := s.([]interface{})
-				source := slice[0].(string)
-				last := int(slice[1].(float64))
-				DisconnectedValidator.WithLabelValues(source, target, fmt.Sprintf("%d", last)).Set(1)
-			}
-		}
-	}
+	roundCache.Add(round, struct{}{})
+	CurrentRound.Set(float64(round))
 }
