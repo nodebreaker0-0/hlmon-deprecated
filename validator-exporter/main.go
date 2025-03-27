@@ -34,19 +34,16 @@ func logDebug(format string, args ...interface{}) {
 		log.Printf("[DEBUG] "+format, args...)
 	}
 }
-
 func logInfo(format string, args ...interface{}) {
 	if logLevel >= LogLevelInfo {
 		log.Printf("[INFO] "+format, args...)
 	}
 }
-
 func logWarn(format string, args ...interface{}) {
 	if logLevel >= LogLevelWarn {
 		log.Printf("[WARN] "+format, args...)
 	}
 }
-
 func logError(format string, args ...interface{}) {
 	if logLevel >= LogLevelError {
 		log.Printf("[ERROR] "+format, args...)
@@ -60,7 +57,10 @@ type heartbeatInfo struct {
 }
 
 var (
-	// 기존 메트릭들
+	//--------------------------------------------------
+	// 기존/추가 메트릭들
+	//--------------------------------------------------
+
 	lastVoteRound = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "validator_last_vote_round",
 		Help: "Last vote round number for the validator",
@@ -92,42 +92,94 @@ var (
 		[]string{"validator"},
 	)
 
-	// 새롭게 추가할 vote 시간 차이 메트릭 (초 단위)
+	// Vote 시간 차이(초)
 	voteTimeDiff = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "vote_time_diff_seconds",
 		Help: "Time difference in seconds between the timestamp of the last vote and the current time",
 	})
 
-	// heartbeatMap: key는 random_id 문자열, 값은 heartbeatInfo 구조체.
+	// Status 로그 관련
+	myValidatorJailed = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "my_validator_jailed",
+		Help: "1 if my validator is jailed, 0 otherwise",
+	})
+	myValidatorMissingHeartbeat = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "my_validator_missing_heartbeat",
+		Help: "1 if my validator is in validators_missing_heartbeat, 0 otherwise",
+	})
+	myValidatorSinceLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "my_validator_since_last_success",
+		Help: "Heartbeat since_last_success from status logs for my validator",
+	})
+	myValidatorLastAckDuration = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "my_validator_last_ack_duration",
+		Help: "Heartbeat last_ack_duration from status logs for my validator",
+	})
+	disconnectedValidatorGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "disconnected_validator",
+			Help: "1 if a validator is disconnected from me, 0 otherwise",
+		},
+		[]string{"validator"},
+	)
+
+	// 마지막으로 읽은 로그 라인의 "로그 타임스탬프"(= JSON 첫 칸)
+	lastConsensusLogReadTS = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "last_consensus_log_read_ts",
+		Help: "Timestamp (unix) of the last consensus log line's own timestamp",
+	})
+	lastStatusLogReadTS = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "last_status_log_read_ts",
+		Help: "Timestamp (unix) of the last status log line's own timestamp",
+	})
+
+	//--------------------------------------------------
+	// 기타 전역
+	//--------------------------------------------------
 	heartbeatMap      = make(map[string]*heartbeatInfo)
 	heartbeatMapMutex sync.Mutex
+
+	lastVoteTime time.Time
+
+	disconnectedSet      = make(map[string]bool)
+	disconnectedSetMutex sync.Mutex
 )
 
-// 마지막 vote 메시지의 타임스탬프를 저장하는 전역 변수
-var lastVoteTime time.Time
-
 func main() {
+	//--------------------------------------------------
 	// 플래그 파싱
+	//--------------------------------------------------
 	validatorAddrFull := flag.String("validator-address", "", "Full validator address")
 	consensusPath := flag.String("consensus-path", "", "Path to consensus logs (hourly directory)")
+	statusPath := flag.String("status-path", "", "Path to status logs (hourly directory)")
 	logLevelFlag := flag.Int("log-level", LogLevelInfo, "Log level (1=ERROR, 2=WARN, 3=INFO, 4=DEBUG)")
 	flag.Parse()
 
-	// 로그 레벨 설정
 	logLevel = *logLevelFlag
 
-	if *validatorAddrFull == "" || *consensusPath == "" {
-		log.Fatal("Both --validator-address and --consensus-path are required")
+	if *validatorAddrFull == "" || *consensusPath == "" || *statusPath == "" {
+		log.Fatal("All of --validator-address, --consensus-path, and --status-path are required")
 	}
 
-	// 단축형 주소 생성 (예: "0xef22..d5ac")
 	shortValidator := shortenAddress(*validatorAddrFull)
 
-	// Prometheus 메트릭 등록 (새 메트릭 포함)
-	prometheus.MustRegister(lastVoteRound, currentRound, heartbeatAckDelayVec,
-		lastVoteRoundUpdateTs, currentRoundUpdateTs, heartbeatAckUpdateTsVec, voteTimeDiff)
+	//--------------------------------------------------
+	// Prometheus 메트릭 등록
+	//--------------------------------------------------
+	prometheus.MustRegister(
+		lastVoteRound, currentRound, heartbeatAckDelayVec,
+		lastVoteRoundUpdateTs, currentRoundUpdateTs, heartbeatAckUpdateTsVec, voteTimeDiff,
 
-	// vote_time_diff_seconds 갱신 고루틴
+		myValidatorJailed, myValidatorMissingHeartbeat,
+		myValidatorSinceLastSuccess, myValidatorLastAckDuration,
+		disconnectedValidatorGauge,
+
+		lastConsensusLogReadTS, lastStatusLogReadTS,
+	)
+
+	//--------------------------------------------------
+	// vote_time_diff_seconds 갱신
+	//--------------------------------------------------
 	go func() {
 		for {
 			time.Sleep(1 * time.Second)
@@ -138,13 +190,17 @@ func main() {
 		}
 	}()
 
-	// HTTP server를 통해 메트릭 노출 (포트 2112)
+	//--------------------------------------------------
+	// HTTP 서버
+	//--------------------------------------------------
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(":2112", nil))
 	}()
 
-	// heartbeatMap 정리(cleanup) 루틴: 1초마다 5초 이상 지난 heartbeat 항목 삭제
+	//--------------------------------------------------
+	// heartbeatMap cleanup
+	//--------------------------------------------------
 	go func() {
 		for {
 			time.Sleep(1 * time.Second)
@@ -152,37 +208,52 @@ func main() {
 		}
 	}()
 
-	// 라인 처리를 위한 채널 및 다수의 워커 고루틴 실행
-	lineCh := make(chan string, 10000)
-	const numWorkers = 16
-	for i := 0; i < numWorkers; i++ {
+	//--------------------------------------------------
+	// 컨센서스 로그 처리
+	//--------------------------------------------------
+	consensusLineCh := make(chan string, 10000)
+	const numConsensusWorkers = 16
+	for i := 0; i < numConsensusWorkers; i++ {
 		go func() {
-			for line := range lineCh {
+			for line := range consensusLineCh {
 				processLogLine(line, shortValidator)
 			}
 		}()
 	}
+	go tailLogs(*consensusPath, consensusLineCh)
 
-	// 파일 tailing 고루틴: 로그파일은 매시간 새로 생성되므로, 새 파일을 자동 감지하도록 tailLogs 함수를 사용.
-	go tailLogs(*consensusPath, lineCh)
+	//--------------------------------------------------
+	// 스테이터스 로그 처리
+	//--------------------------------------------------
+	statusLineCh := make(chan string, 1000)
+	const numStatusWorkers = 4
+	for i := 0; i < numStatusWorkers; i++ {
+		go func() {
+			for line := range statusLineCh {
+				processStatusLogLine(line, *validatorAddrFull)
+			}
+		}()
+	}
+	go tailStatusLogs(*statusPath, statusLineCh)
 
-	// 메인 루프는 블로킹
+	//--------------------------------------------------
+	// 메인 루프 블로킹
+	//--------------------------------------------------
 	select {}
 }
 
-// tailLogs continuously tails log files which are rotated hourly.
+// tailLogs continuously tails log files which are rotated hourly (consensus logs).
 func tailLogs(basePath string, lineCh chan<- string) {
 	for {
-		// 현재 시간을 기준으로 로그 파일 경로 계산 (예: consensusPath/YYYYMMDD/HOUR)
 		now := time.Now()
 		dateDir := now.Format("20060102")
 		hourDir := fmt.Sprintf("%d", now.Hour())
 		filePath := filepath.Join(basePath, dateDir, hourDir)
-		logInfo("Tailing log file: %s", filePath)
 
+		logInfo("Tailing consensus log file: %s", filePath)
 		file, err := os.Open(filePath)
 		if err != nil {
-			logError("Error opening file %s: %v", filePath, err)
+			logError("Error opening consensus file %s: %v", filePath, err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -190,20 +261,18 @@ func tailLogs(basePath string, lineCh chan<- string) {
 		reader := bufio.NewReader(file)
 		lastReadTime := time.Now()
 
-		// 파일의 끝(EOF) 상태가 지속되면 새 파일로 전환
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err == io.EOF {
 					time.Sleep(100 * time.Millisecond)
-					// 만약 마지막 읽은 이후 1분 이상 로그 업데이트가 없으면 파일 종료로 판단
 					if time.Since(lastReadTime) > 1*time.Minute {
-						logInfo("No new logs for 1 minute, switching to new file.")
+						logInfo("No new consensus logs for 1 minute, switching to new file.")
 						break
 					}
 					continue
 				} else {
-					logError("Error reading file %s: %v", filePath, err)
+					logError("Error reading consensus file %s: %v", filePath, err)
 					break
 				}
 			}
@@ -211,21 +280,49 @@ func tailLogs(basePath string, lineCh chan<- string) {
 			lineCh <- line
 		}
 		file.Close()
-		// 새 파일로 전환 전에 잠시 대기
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-// cleanupHeartbeatMap removes heartbeat entries older than the given duration.
-func cleanupHeartbeatMap(threshold time.Duration) {
-	heartbeatMapMutex.Lock()
-	defer heartbeatMapMutex.Unlock()
-	now := time.Now()
-	for key, info := range heartbeatMap {
-		if now.Sub(info.sendTime) > threshold {
-			logDebug("[Cleanup] Removing heartbeat with random_id=%s, age=%v", key, now.Sub(info.sendTime))
-			delete(heartbeatMap, key)
+// tailStatusLogs continuously tails log files which are rotated hourly (status logs).
+func tailStatusLogs(basePath string, lineCh chan<- string) {
+	for {
+		now := time.Now()
+		dateDir := now.Format("20060102")
+		hourDir := fmt.Sprintf("%d", now.Hour())
+		filePath := filepath.Join(basePath, dateDir, hourDir)
+
+		logInfo("Tailing status log file: %s", filePath)
+		file, err := os.Open(filePath)
+		if err != nil {
+			logError("Error opening status file %s: %v", filePath, err)
+			time.Sleep(10 * time.Second)
+			continue
 		}
+
+		reader := bufio.NewReader(file)
+		lastReadTime := time.Now()
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					time.Sleep(100 * time.Millisecond)
+					if time.Since(lastReadTime) > 1*time.Minute {
+						logInfo("No new status logs for 1 minute, switching to new file.")
+						break
+					}
+					continue
+				} else {
+					logError("Error reading status file %s: %v", filePath, err)
+					break
+				}
+			}
+			lastReadTime = time.Now()
+			lineCh <- line
+		}
+		file.Close()
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -237,29 +334,46 @@ func shortenAddress(addr string) string {
 	return addr[:6] + ".." + addr[len(addr)-4:]
 }
 
-// processLogLine parses a single JSON log line and updates Prometheus metrics accordingly.
+// cleanupHeartbeatMap removes heartbeat entries older than the given duration.
+func cleanupHeartbeatMap(threshold time.Duration) {
+	heartbeatMapMutex.Lock()
+	defer heartbeatMapMutex.Unlock()
+	now := time.Now()
+	for key, info := range heartbeatMap {
+		if now.Sub(info.sendTime) > threshold {
+			logDebug("[Cleanup] Removing heartbeat random_id=%s, age=%v", key, now.Sub(info.sendTime))
+			delete(heartbeatMap, key)
+		}
+	}
+}
+
+// processLogLine parses a single JSON log line from consensus logs,
+// and updates relevant metrics. (including lastConsensusLogReadTS)
 func processLogLine(line string, shortValidator string) {
 	var logEntry []interface{}
 	if err := json.Unmarshal([]byte(line), &logEntry); err != nil {
-		logError("Error unmarshaling line: %v", err)
+		logError("Error unmarshaling consensus line: %v", err)
 		return
 	}
 	if len(logEntry) < 2 {
 		return
 	}
 
-	// timestamp 파싱 (타임존 정보 없이 "2006-01-02T15:04:05.999999999" 포맷 사용)
+	// 첫 번째 필드 = 로그 자체 타임스탬프
 	timestampStr, ok := logEntry[0].(string)
 	if !ok {
 		return
 	}
-	timestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestampStr)
+	parsedTime, err := time.Parse("2006-01-02T15:04:05.999999999", timestampStr)
 	if err != nil {
-		logError("Error parsing timestamp: %v", err)
+		logDebug("Error parsing consensus timestamp: %v", err)
 		return
 	}
 
-	// 두번째 요소는 [direction, message object]
+	// -> 여기서 메트릭 업데이트 (로그가 가진 타임스탬프)
+	lastConsensusLogReadTS.Set(float64(parsedTime.Unix()))
+
+	// 두 번째 필드 = 실제 내용
 	details, ok := logEntry[1].([]interface{})
 	if !ok || len(details) < 2 {
 		return
@@ -273,7 +387,7 @@ func processLogLine(line string, shortValidator string) {
 		return
 	}
 
-	// --- Vote 메시지 처리 ---
+	// Vote 처리
 	if voteVal, exists := msgObj["Vote"]; exists {
 		voteMap, ok := voteVal.(map[string]interface{})
 		if ok {
@@ -282,28 +396,30 @@ func processLogLine(line string, shortValidator string) {
 				validator, ok := voteData["validator"].(string)
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
-						lastVoteTime = timestamp
-						lastVoteRound.Set(float64(int64(roundVal)))
+						// lastVoteTime 갱신
+						lastVoteTime = parsedTime
+						lastVoteRound.Set(roundVal)
 						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
-						logDebug("[Vote] Received vote: round=%d, timestamp=%v", int64(roundVal), timestamp)
+
+						logDebug("[Vote] Received vote: round=%d, timestamp=%v", int64(roundVal), parsedTime)
 					}
 				}
 			}
 		}
 	}
 
-	// --- Block 메시지 처리 (현재 round 업데이트) ---
+	// Block 처리 (현재 round)
 	if blockVal, exists := msgObj["Block"]; exists {
 		blockMap, ok := blockVal.(map[string]interface{})
 		if ok {
 			if roundVal, ok := blockMap["round"].(float64); ok {
-				currentRound.Set(float64(int64(roundVal)))
+				currentRound.Set(roundVal)
 				currentRoundUpdateTs.Set(float64(time.Now().Unix()))
 			}
 		}
 	}
 
-	// --- Heartbeat 메시지 처리 (우리의 out 메시지) ---
+	// Heartbeat out 처리
 	if heartbeatVal, exists := msgObj["Heartbeat"]; exists && direction == "out" {
 		hbMap, ok := heartbeatVal.(map[string]interface{})
 		if ok {
@@ -314,11 +430,12 @@ func processLogLine(line string, shortValidator string) {
 					key := fmt.Sprintf("%d", int64(randID))
 					heartbeatMapMutex.Lock()
 					heartbeatMap[key] = &heartbeatInfo{
-						sendTime: timestamp,
+						sendTime: parsedTime,
 						acks:     make(map[string]bool),
 					}
 					heartbeatMapMutex.Unlock()
-					logDebug("[Heartbeat Out] Registered heartbeat: random_id=%s, timestamp=%v", key, timestamp)
+
+					logDebug("[Heartbeat Out] Registered heartbeat: random_id=%s, ts=%v", key, parsedTime)
 				} else {
 					logWarn("[Heartbeat Out] Missing random_id field")
 				}
@@ -326,7 +443,7 @@ func processLogLine(line string, shortValidator string) {
 		}
 	}
 
-	// --- HeartbeatAck 메시지 처리 ---
+	// HeartbeatAck in 처리
 	var ackContent interface{}
 	if val, exists := msgObj["HeartbeatAck"]; exists {
 		ackContent = val
@@ -351,18 +468,19 @@ func processLogLine(line string, shortValidator string) {
 			if exists {
 				src, okSrc := msgObj["source"].(string)
 				if !okSrc {
-					logWarn("[HeartbeatAck In] Source field missing for ack: random_id=%s", key)
+					logWarn("[HeartbeatAck In] Source field missing for ack random_id=%s", key)
 					heartbeatMapMutex.Unlock()
 					return
 				}
 				if _, alreadyAcked := hbInfo.acks[src]; alreadyAcked {
-					logDebug("[HeartbeatAck In] Duplicate ack from validator=%s for random_id=%s", src, key)
+					logDebug("[HeartbeatAck In] Duplicate ack from validator=%s random_id=%s", src, key)
 				} else {
 					delay := time.Since(hbInfo.sendTime)
 					heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
 					heartbeatAckUpdateTsVec.WithLabelValues(src).Set(float64(time.Now().Unix()))
 					hbInfo.acks[src] = true
-					logDebug("[HeartbeatAck In] Matched heartbeat: random_id=%s, source=%s, delay=%v", key, src, delay)
+
+					logDebug("[HeartbeatAck In] Matched heartbeat random_id=%s source=%s delay=%v", key, src, delay)
 				}
 			} else {
 				logDebug("[HeartbeatAck In] No matching heartbeat found for random_id=%s", key)
@@ -372,4 +490,147 @@ func processLogLine(line string, shortValidator string) {
 			logWarn("[HeartbeatAck In] Missing random_id field in ack")
 		}
 	}
+}
+
+// processStatusLogLine parses a single JSON log line from status logs.
+// and updates relevant metrics. (including lastStatusLogReadTS)
+func processStatusLogLine(line string, myValidatorAddr string) {
+	var logEntry []interface{}
+	if err := json.Unmarshal([]byte(line), &logEntry); err != nil {
+		logError("Error unmarshaling status line: %v", err)
+		return
+	}
+	if len(logEntry) < 2 {
+		return
+	}
+
+	// 첫 번째 필드 = 로그 자체 타임스탬프
+	timestampStr, ok := logEntry[0].(string)
+	if !ok {
+		return
+	}
+	parsedTime, err := time.Parse("2006-01-02T15:04:05.999999999", timestampStr)
+	if err != nil {
+		logDebug("Error parsing status timestamp: %v", err)
+		return
+	}
+
+	// -> 여기서 메트릭 업데이트 (로그가 가진 타임스탬프)
+	lastStatusLogReadTS.Set(float64(parsedTime.Unix()))
+
+	// 두 번째 필드 = status 정보
+	bodyMap, ok := logEntry[1].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	// home_validator 체크
+	homeVal, ok := bodyMap["home_validator"].(string)
+	if !ok {
+		return
+	}
+	if homeVal != myValidatorAddr {
+		return
+	}
+
+	// current_jailed_validators
+	jailedList, _ := bodyMap["current_jailed_validators"].([]interface{})
+	isJailed := 0.0
+	for _, v := range jailedList {
+		if vStr, ok := v.(string); ok {
+			if vStr == myValidatorAddr {
+				isJailed = 1.0
+				break
+			}
+		}
+	}
+	myValidatorJailed.Set(isJailed)
+
+	// validators_missing_heartbeat
+	missingHBList, _ := bodyMap["validators_missing_heartbeat"].([]interface{})
+	isMissingHB := 0.0
+	for _, v := range missingHBList {
+		if vStr, ok := v.(string); ok {
+			if vStr == myValidatorAddr {
+				isMissingHB = 1.0
+				break
+			}
+		}
+	}
+	myValidatorMissingHeartbeat.Set(isMissingHB)
+
+	// heartbeat_statuses => [ [ "valAddr", { since_last_success, last_ack_duration } ], ... ]
+	hsArr, _ := bodyMap["heartbeat_statuses"].([]interface{})
+	for _, item := range hsArr {
+		entry, ok := item.([]interface{})
+		if !ok || len(entry) < 2 {
+			continue
+		}
+		valAddr, ok1 := entry[0].(string)
+		infoMap, ok2 := entry[1].(map[string]interface{})
+		if !ok1 || !ok2 {
+			continue
+		}
+		if valAddr == myValidatorAddr {
+			// since_last_success
+			if s, ok := infoMap["since_last_success"].(float64); ok {
+				myValidatorSinceLastSuccess.Set(s)
+			} else {
+				myValidatorSinceLastSuccess.Set(0)
+			}
+			// last_ack_duration
+			if d, ok := infoMap["last_ack_duration"].(float64); ok {
+				myValidatorLastAckDuration.Set(d)
+			} else {
+				myValidatorLastAckDuration.Set(0)
+			}
+			break
+		}
+	}
+
+	// disconnected_validators => [ [ "내주소", [ ["상대주소", <round>], ... ] ], ... ]
+	discArr, _ := bodyMap["disconnected_validators"].([]interface{})
+	newSet := make(map[string]bool)
+
+	for _, item := range discArr {
+		sub, ok := item.([]interface{})
+		if !ok || len(sub) < 2 {
+			continue
+		}
+		valAddr, ok := sub[0].(string)
+		if !ok {
+			continue
+		}
+		if valAddr == myValidatorAddr {
+			detailList, ok := sub[1].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, d := range detailList {
+				dArr, ok := d.([]interface{})
+				if !ok || len(dArr) < 1 {
+					continue
+				}
+				peerAddr, ok := dArr[0].(string)
+				if !ok {
+					continue
+				}
+				newSet[peerAddr] = true
+			}
+		}
+	}
+
+	disconnectedSetMutex.Lock()
+	// 1) 기존에 있었는데 이번에 사라진 것 => 0
+	for oldAddr := range disconnectedSet {
+		if _, stillThere := newSet[oldAddr]; !stillThere {
+			disconnectedValidatorGauge.WithLabelValues(oldAddr).Set(0)
+		}
+	}
+	// 2) 새로 생긴 것 => 1
+	for newAddr := range newSet {
+		disconnectedValidatorGauge.WithLabelValues(newAddr).Set(1)
+	}
+	disconnectedSet = newSet
+	disconnectedSetMutex.Unlock()
 }
