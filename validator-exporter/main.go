@@ -17,6 +17,42 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Constants for log levels.
+const (
+	LogLevelError = 1
+	LogLevelWarn  = 2
+	LogLevelInfo  = 3
+	LogLevelDebug = 4
+)
+
+// Global log level variable.
+var logLevel int
+
+// Helper log functions.
+func logDebug(format string, args ...interface{}) {
+	if logLevel >= LogLevelDebug {
+		log.Printf("[DEBUG] "+format, args...)
+	}
+}
+
+func logInfo(format string, args ...interface{}) {
+	if logLevel >= LogLevelInfo {
+		log.Printf("[INFO] "+format, args...)
+	}
+}
+
+func logWarn(format string, args ...interface{}) {
+	if logLevel >= LogLevelWarn {
+		log.Printf("[WARN] "+format, args...)
+	}
+}
+
+func logError(format string, args ...interface{}) {
+	if logLevel >= LogLevelError {
+		log.Printf("[ERROR] "+format, args...)
+	}
+}
+
 // heartbeatInfo stores the send timestamp and acked validators for a heartbeat.
 type heartbeatInfo struct {
 	sendTime time.Time
@@ -74,7 +110,11 @@ func main() {
 	// 플래그 파싱
 	validatorAddrFull := flag.String("validator-address", "", "Full validator address")
 	consensusPath := flag.String("consensus-path", "", "Path to consensus logs (hourly directory)")
+	logLevelFlag := flag.Int("log-level", LogLevelInfo, "Log level (1=ERROR, 2=WARN, 3=INFO, 4=DEBUG)")
 	flag.Parse()
+
+	// 로그 레벨 설정
+	logLevel = *logLevelFlag
 
 	if *validatorAddrFull == "" || *consensusPath == "" {
 		log.Fatal("Both --validator-address and --consensus-path are required")
@@ -112,13 +152,6 @@ func main() {
 		}
 	}()
 
-	// 최신 로그 파일 경로 계산 (예: consensusPath/YYYYMMDD/시간)
-	now := time.Now()
-	dateDir := now.Format("20060102")
-	hourDir := fmt.Sprintf("%d", now.Hour())
-	logFilePath := filepath.Join(*consensusPath, dateDir, hourDir)
-	log.Printf("Tailing log file: %s", logFilePath)
-
 	// 라인 처리를 위한 채널 및 다수의 워커 고루틴 실행
 	lineCh := make(chan string, 10000)
 	const numWorkers = 16
@@ -130,11 +163,57 @@ func main() {
 		}()
 	}
 
-	// 파일 tailing 고루틴 (로그가 빠르게 추가됨)
-	go tailFile(logFilePath, lineCh)
+	// 파일 tailing 고루틴: 로그파일은 매시간 새로 생성되므로, 새 파일을 자동 감지하도록 tailLogs 함수를 사용.
+	go tailLogs(*consensusPath, lineCh)
 
 	// 메인 루프는 블로킹
 	select {}
+}
+
+// tailLogs continuously tails log files which are rotated hourly.
+func tailLogs(basePath string, lineCh chan<- string) {
+	for {
+		// 현재 시간을 기준으로 로그 파일 경로 계산 (예: consensusPath/YYYYMMDD/HOUR)
+		now := time.Now()
+		dateDir := now.Format("20060102")
+		hourDir := fmt.Sprintf("%d", now.Hour())
+		filePath := filepath.Join(basePath, dateDir, hourDir)
+		logInfo("Tailing log file: %s", filePath)
+
+		file, err := os.Open(filePath)
+		if err != nil {
+			logError("Error opening file %s: %v", filePath, err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		reader := bufio.NewReader(file)
+		lastReadTime := time.Now()
+
+		// 파일의 끝(EOF) 상태가 지속되면 새 파일로 전환
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					time.Sleep(100 * time.Millisecond)
+					// 만약 마지막 읽은 이후 1분 이상 로그 업데이트가 없으면 파일 종료로 판단
+					if time.Since(lastReadTime) > 1*time.Minute {
+						logInfo("No new logs for 1 minute, switching to new file.")
+						break
+					}
+					continue
+				} else {
+					logError("Error reading file %s: %v", filePath, err)
+					break
+				}
+			}
+			lastReadTime = time.Now()
+			lineCh <- line
+		}
+		file.Close()
+		// 새 파일로 전환 전에 잠시 대기
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // cleanupHeartbeatMap removes heartbeat entries older than the given duration.
@@ -144,7 +223,7 @@ func cleanupHeartbeatMap(threshold time.Duration) {
 	now := time.Now()
 	for key, info := range heartbeatMap {
 		if now.Sub(info.sendTime) > threshold {
-			log.Printf("[Cleanup] Removing heartbeat with random_id=%s, age=%v", key, now.Sub(info.sendTime))
+			logDebug("[Cleanup] Removing heartbeat with random_id=%s, age=%v", key, now.Sub(info.sendTime))
 			delete(heartbeatMap, key)
 		}
 	}
@@ -158,42 +237,11 @@ func shortenAddress(addr string) string {
 	return addr[:6] + ".." + addr[len(addr)-4:]
 }
 
-// tailFile opens the log file and continuously reads new lines, sending each line to lineCh.
-func tailFile(filePath string, lineCh chan<- string) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Printf("Error opening file %s: %v", filePath, err)
-		return
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			} else {
-				log.Printf("Error reading file: %v", err)
-				break
-			}
-		}
-		// trim 후 채널로 전송
-		lineCh <- line
-	}
-}
-
 // processLogLine parses a single JSON log line and updates Prometheus metrics accordingly.
 func processLogLine(line string, shortValidator string) {
-	// 로그 라인은 JSON 배열 형태임:
-	// [
-	//   "2025-03-26T11:13:15.591117076",
-	//   ["in" 또는 "out", { ... }]
-	// ]
 	var logEntry []interface{}
 	if err := json.Unmarshal([]byte(line), &logEntry); err != nil {
-		log.Printf("Error unmarshaling line: %v", err)
+		logError("Error unmarshaling line: %v", err)
 		return
 	}
 	if len(logEntry) < 2 {
@@ -207,7 +255,7 @@ func processLogLine(line string, shortValidator string) {
 	}
 	timestamp, err := time.Parse("2006-01-02T15:04:05.999999999", timestampStr)
 	if err != nil {
-		log.Printf("Error parsing timestamp: %v", err)
+		logError("Error parsing timestamp: %v", err)
 		return
 	}
 
@@ -234,11 +282,10 @@ func processLogLine(line string, shortValidator string) {
 				validator, ok := voteData["validator"].(string)
 				if ok && validator == shortValidator {
 					if roundVal, ok := voteData["round"].(float64); ok {
-						// Vote가 들어올 때마다 마지막 vote 타임 업데이트
 						lastVoteTime = timestamp
 						lastVoteRound.Set(float64(int64(roundVal)))
 						lastVoteRoundUpdateTs.Set(float64(time.Now().Unix()))
-						log.Printf("[Vote] Received vote: round=%d, timestamp=%v", int64(roundVal), timestamp)
+						logDebug("[Vote] Received vote: round=%d, timestamp=%v", int64(roundVal), timestamp)
 					}
 				}
 			}
@@ -271,9 +318,9 @@ func processLogLine(line string, shortValidator string) {
 						acks:     make(map[string]bool),
 					}
 					heartbeatMapMutex.Unlock()
-					log.Printf("[Heartbeat Out] Registered heartbeat: random_id=%s, timestamp=%v", key, timestamp)
+					logDebug("[Heartbeat Out] Registered heartbeat: random_id=%s, timestamp=%v", key, timestamp)
 				} else {
-					log.Printf("[Heartbeat Out] Missing random_id field")
+					logWarn("[Heartbeat Out] Missing random_id field")
 				}
 			}
 		}
@@ -293,7 +340,7 @@ func processLogLine(line string, shortValidator string) {
 	if ackContent != nil && direction == "in" {
 		ackMap, ok := ackContent.(map[string]interface{})
 		if !ok {
-			log.Printf("[HeartbeatAck In] Ack content not a map")
+			logWarn("[HeartbeatAck In] Ack content not a map")
 			return
 		}
 		randID, ok1 := ackMap["random_id"].(float64)
@@ -304,25 +351,25 @@ func processLogLine(line string, shortValidator string) {
 			if exists {
 				src, okSrc := msgObj["source"].(string)
 				if !okSrc {
-					log.Printf("[HeartbeatAck In] Source field missing for ack: random_id=%s", key)
+					logWarn("[HeartbeatAck In] Source field missing for ack: random_id=%s", key)
 					heartbeatMapMutex.Unlock()
 					return
 				}
 				if _, alreadyAcked := hbInfo.acks[src]; alreadyAcked {
-					log.Printf("[HeartbeatAck In] Duplicate ack from validator=%s for random_id=%s", src, key)
+					logDebug("[HeartbeatAck In] Duplicate ack from validator=%s for random_id=%s", src, key)
 				} else {
 					delay := time.Since(hbInfo.sendTime)
 					heartbeatAckDelayVec.WithLabelValues(src).Set(float64(delay.Milliseconds()))
 					heartbeatAckUpdateTsVec.WithLabelValues(src).Set(float64(time.Now().Unix()))
 					hbInfo.acks[src] = true
-					log.Printf("[HeartbeatAck In] Matched heartbeat: random_id=%s, source=%s, delay=%v", key, src, delay)
+					logDebug("[HeartbeatAck In] Matched heartbeat: random_id=%s, source=%s, delay=%v", key, src, delay)
 				}
 			} else {
-				log.Printf("[HeartbeatAck In] No matching heartbeat found for random_id=%s", key)
+				logDebug("[HeartbeatAck In] No matching heartbeat found for random_id=%s", key)
 			}
 			heartbeatMapMutex.Unlock()
 		} else {
-			log.Printf("[HeartbeatAck In] Missing random_id field in ack")
+			logWarn("[HeartbeatAck In] Missing random_id field in ack")
 		}
 	}
 }
